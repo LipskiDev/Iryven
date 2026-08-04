@@ -1,0 +1,6 @@
+[submodule "external/velos"]
+	path = external/velos
+	url = https://github.com/LipskiDev/velos.git
+[submodule "external/glfw"]
+	path = external/glfw
+	url = https://github.com/glfw/glfw.git
