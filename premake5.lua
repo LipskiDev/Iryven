@@ -9,10 +9,16 @@ outputdir = "%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}"
 IryvenPublicIncludeDirs = {
     "engine/include",
     "external/velos/velos",
-    "external/velos/external/SPIRV-Reflect"
+    "external/velos/external/SPIRV-Reflect",
+    "external/spdlog/include"
+}
+
+IryvenPublicDefines = {
+    "SPDLOG_COMPILED_LIB"
 }
 
 include "premake/velos.lua"
+include "premake/spdlog.lua"
 
 project "Iryven"
     location "build/Iryven"
@@ -25,10 +31,12 @@ project "Iryven"
     files { "engine/include/**.h", "engine/src/**.h", "engine/src/**.cpp" }
     includedirs (IryvenPublicIncludeDirs)
     includedirs { "external/glfw/include" }
-    links { "Velos" }
+    defines (IryvenPublicDefines)
+    links { "Velos", "spdlog" }
 
     filter "system:windows"
         systemversion "latest"
+        buildoptions { "/utf-8" }
         defines { "IRYVEN_PLATFORM_WINDOWS" }
     filter "system:linux"
         pic "On"
@@ -58,7 +66,12 @@ project "Sandbox"
     objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
     files { "sandbox/**.h", "sandbox/**.cpp" }
     includedirs (IryvenPublicIncludeDirs)
+    defines (IryvenPublicDefines)
     links { "Iryven" }
+
+    filter "system:windows"
+        systemversion "latest"
+        buildoptions { "/utf-8" }
 
     filter "configurations:Debug"
         runtime "Debug"
@@ -78,7 +91,11 @@ project "IryvenTests"
     objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
     files { "tests/**.cpp" }
     includedirs (IryvenPublicIncludeDirs)
+    defines (IryvenPublicDefines)
     links { "Iryven" }
+    filter "system:windows"
+        systemversion "latest"
+        buildoptions { "/utf-8" }
     filter "configurations:Debug"
         runtime "Debug"
         symbols "On"

@@ -1,5 +1,6 @@
 #include <iryven/engine.h>
 #include <rhi/device.h>
+#include <iryven/log.h>
 
 
 #include <utility>
@@ -13,6 +14,9 @@ Engine::Engine(EngineConfig config)
         .enableValidation = true,
         .applicationName = "Iryven Engine",
     });
+
+    Log::Init();
+
 }
 
 Engine::~Engine()
