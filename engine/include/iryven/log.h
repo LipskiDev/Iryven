@@ -2,6 +2,8 @@
 
 #include <memory>
 #include <spdlog/spdlog.h>
+#include "spdlog/fmt/ostr.h"
+#include <iryven/formatters.h>
 
 namespace Iryven {
 	class Log {

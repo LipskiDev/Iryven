@@ -6,12 +6,12 @@
 #include <iostream>
 
 namespace Iryven {
-	std::unique_ptr<Window> Iryven::CreateWindow()
+	std::unique_ptr<Window> Iryven::CreateWindow(const WindowProperties& properties)
 	{
 		return std::make_unique<GlfwWindow>(
-			1600,
-			900,
-			"Sandbox",
+			properties.width,
+			properties.height,
+			properties.title,
 			true
 		);
 	}

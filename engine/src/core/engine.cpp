@@ -4,19 +4,30 @@
 
 
 #include <utility>
+#include <iryven/events/application_event.h>
+#include <iryven/events/keyboard_event.h>
 
 namespace Iryven {
 
+#define BIND_EVENT_FN(x) std::bind(&Engine::x, this, std::placeholders::_1)
+
 Engine::Engine(EngineConfig config)
-    : m_config(std::move(config)) {
-    device_ = Velos::RHI::CreateDevice({
-        .graphicsAPI = Velos::RHI::GraphicsAPI::Vulkan,
-        .enableValidation = true,
-        .applicationName = "Iryven Engine",
-    });
+    : config_(std::move(config)) {
 
     Log::Init();
 
+    window_ = Iryven::CreateWindow(WindowProperties(config_.title, config_.width, config_.height));
+
+    window_->SetEventCallback(
+        [this](Event& event) {
+            OnEvent(event);
+        });
+
+    device_ = Velos::RHI::CreateDevice({
+        .graphicsAPI = Velos::RHI::GraphicsAPI::Vulkan,
+        .enableValidation = true,
+        .applicationName = config_.title.c_str(),
+        });
 }
 
 Engine::~Engine()
@@ -29,7 +40,41 @@ World Engine::CreateWorld() const {
 }
 
 const EngineConfig& Engine::GetConfig() const noexcept {
-    return m_config;
+    return config_;
+}
+
+void Engine::Run()
+{
+	while (running_) {
+		input_.BeginFrame();
+		window_->PollEvents();
+        input_.EvaluateActions();
+    }
+}
+
+void Engine::OnEvent(Event& event)
+{
+	input_.OnEvent(event);
+
+	EventDispatcher dispatcher(event);
+	//IRYVEN_CORE_TRACE("{0}", event);
+
+    dispatcher.Dispatch<WindowCloseEvent>(
+        [this](WindowCloseEvent& e) {
+            return OnWindowClose(e);
+        }
+    );
+}
+
+bool Engine::OnWindowClose(WindowCloseEvent& event)
+{
+    running_ = false;
+    return true;
+}
+
+InputHandler& Engine::GetInput()
+{
+    return input_;
 }
 
 } // namespace Iryven

@@ -1,25 +1,22 @@
 #include <iryven/iryven.h>
 
 int main() {
-    auto window = Iryven::CreateWindow();
-
     Iryven::Engine engine({
         .title = "Sandbox",
-        .width = 1920,
-        .height = 1080
     });
 
-    IRYVEN_CORE_TRACE("TRACE");
-    IRYVEN_CORE_INFO("INFO");
-    IRYVEN_CORE_WARN("WARN");
-    IRYVEN_CORE_ERROR("ERROR");
-    IRYVEN_CORE_FATAL("FATAL");
+    auto& input = engine.GetInput();
 
+    input.BindAction("Jump", Iryven::Key::Space);
+    input.BindAction("Shoot", Iryven::MouseButton::Left);
 
-    IRYVEN_CLIENT_TRACE("TRACE");
-    IRYVEN_CLIENT_INFO("INFO");
-    IRYVEN_CLIENT_WARN("WARN");
-    IRYVEN_CLIENT_ERROR("ERROR");
-    IRYVEN_CLIENT_FATAL("FATAL");
-    [[maybe_unused]] Iryven::World world = engine.CreateWorld();
+    input.OnActionPressed("Jump", [] {
+        IRYVEN_CLIENT_INFO("Jump");
+        });
+
+    input.OnActionPressed("Shoot", [] {
+        IRYVEN_CLIENT_INFO("Shoot");
+        });
+
+    engine.Run();
 }
