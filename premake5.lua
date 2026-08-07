@@ -22,7 +22,8 @@ IryvenPublicIncludeDirs = {
     "external/velos/velos",
     "external/velos/external/SPIRV-Reflect",
     "external/spdlog/include",
-    "external/glm"
+    "external/glm",
+    "external/flecs/distr"
 }
 
 IryvenPublicDefines = {
@@ -31,6 +32,7 @@ IryvenPublicDefines = {
 
 include "premake/velos.lua"
 include "premake/spdlog.lua"
+include "premake/flecs.lua"
 
 project "Iryven"
     location "build/Iryven"
@@ -40,11 +42,18 @@ project "Iryven"
     staticruntime "off"
     targetdir ("bin/" .. outputdir .. "/%{prj.name}")
     objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
-    files { "engine/include/**.h", "engine/src/**.h", "engine/src/**.cpp" }
+    files {
+        "engine/include/**.h",
+        "engine/src/**.h",
+        "engine/src/**.cpp",
+        "assets/shaders/internal/**.vert",
+        "assets/shaders/internal/**.frag",
+        "assets/shaders/internal/**.hlsl"
+    }
     includedirs (IryvenPublicIncludeDirs)
     includedirs { "external/glfw/include" }
     defines (IryvenPublicDefines)
-    links { "Velos", "spdlog" }
+    links { "Velos", "spdlog", "Flecs" }
 
     filter "system:windows"
         systemversion "latest"

@@ -25,12 +25,23 @@ Engine::Engine(EngineConfig config)
             OnEvent(event);
         });
 
+    world_ = std::make_unique<World>();
 }
 
 Engine::~Engine() = default;
 
-World Engine::CreateWorld() const {
-    return {};
+World& Engine::CreateWorld()
+{
+    world_ = std::make_unique<World>();
+    return *world_;
+}
+
+World& Engine::GetWorld() noexcept {
+    return *world_;
+}
+
+const World& Engine::GetWorld() const noexcept {
+    return *world_;
 }
 
 const EngineConfig& Engine::GetConfig() const noexcept {
@@ -71,16 +82,13 @@ bool Engine::OnWindowClose(WindowCloseEvent& event)
 
 void Engine::Update()
 {
+	world_->Progress();
 }
 
 void Engine::Render()
 {
-    if (!renderer_->BeginFrame()) {
-        return;
-    }
-
-    renderer_->Clear(Color::White);
-    renderer_->EndFrame();
+    RenderScene scene = world_->ExtractRenderScene();
+    renderer_->RenderFrame(scene);
 }
 
 InputHandler& Engine::GetInput()

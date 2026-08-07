@@ -25,7 +25,9 @@ class Engine {
 public:
     explicit Engine(EngineConfig config);
     ~Engine();
-    [[nodiscard]] World CreateWorld() const;
+    World& CreateWorld();
+    [[nodiscard]] World& GetWorld() noexcept;
+    [[nodiscard]] const World& GetWorld() const noexcept;
     [[nodiscard]] const EngineConfig& GetConfig() const noexcept;
     InputHandler& GetInput();
 
@@ -41,6 +43,7 @@ private:
     EngineConfig config_;
     std::unique_ptr<Window> window_;
     std::unique_ptr<Renderer> renderer_;
+    std::unique_ptr<World> world_;
     bool running_ = true;
     InputHandler input_;
 };

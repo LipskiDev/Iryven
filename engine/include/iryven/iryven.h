@@ -8,3 +8,6 @@
 #include <iryven/log.h>
 #include <iryven/events/event.h>
 #include <iryven/events/mouse_event.h>
+#include <iryven/events/application_event.h>
+#include <iryven/events/keyboard_event.h>
+#include <iryven/scene/components/components.h>
