@@ -1,16 +1,19 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <string>
 
 #include <iryven/world.h>
-#include <rhi/device.h>
 #include <iryven/events/event.h>
 #include <iryven/events/application_event.h>
 #include <iryven/window.h>
 #include <iryven/input/input.h>
 
+
 namespace Iryven {
+
+class Renderer;
 
 struct EngineConfig {
     std::string title = "Iryven";
@@ -31,11 +34,13 @@ public:
 private:
     void OnEvent(Event& event);
     bool OnWindowClose(WindowCloseEvent& event);
+    void Update();
+    void Render();
 
 private:
     EngineConfig config_;
     std::unique_ptr<Window> window_;
-    Velos::RHI::IDevice* device_ = nullptr;
+    std::unique_ptr<Renderer> renderer_;
     bool running_ = true;
     InputHandler input_;
 };

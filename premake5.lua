@@ -21,7 +21,8 @@ IryvenPublicIncludeDirs = {
     "engine/include",
     "external/velos/velos",
     "external/velos/external/SPIRV-Reflect",
-    "external/spdlog/include"
+    "external/spdlog/include",
+    "external/glm"
 }
 
 IryvenPublicDefines = {

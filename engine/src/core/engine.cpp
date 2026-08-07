@@ -1,6 +1,6 @@
 #include <iryven/engine.h>
-#include <rhi/device.h>
 #include <iryven/log.h>
+#include "../renderer/renderer.h"
 
 
 #include <utility>
@@ -18,22 +18,16 @@ Engine::Engine(EngineConfig config)
 
     window_ = Iryven::CreateWindow(WindowProperties(config_.title, config_.width, config_.height));
 
+    renderer_ = std::make_unique<Renderer>(*window_);
+
     window_->SetEventCallback(
         [this](Event& event) {
             OnEvent(event);
         });
 
-    device_ = Velos::RHI::CreateDevice({
-        .graphicsAPI = Velos::RHI::GraphicsAPI::Vulkan,
-        .enableValidation = true,
-        .applicationName = config_.title.c_str(),
-        });
 }
 
-Engine::~Engine()
-{
-    Velos::RHI::DestroyDevice(device_);
-}
+Engine::~Engine() = default;
 
 World Engine::CreateWorld() const {
     return {};
@@ -49,6 +43,9 @@ void Engine::Run()
 		input_.BeginFrame();
 		window_->PollEvents();
         input_.EvaluateActions();
+
+        Update();
+        Render();
     }
 }
 
@@ -70,6 +67,20 @@ bool Engine::OnWindowClose(WindowCloseEvent& event)
 {
     running_ = false;
     return true;
+}
+
+void Engine::Update()
+{
+}
+
+void Engine::Render()
+{
+    if (!renderer_->BeginFrame()) {
+        return;
+    }
+
+    renderer_->Clear(Color::White);
+    renderer_->EndFrame();
 }
 
 InputHandler& Engine::GetInput()

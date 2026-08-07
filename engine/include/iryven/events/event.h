@@ -1,6 +1,7 @@
 #pragma once
-#include <string>
 #include <functional>
+#include <ostream>
+#include <string>
 
 namespace Iryven {
 	enum class EventType {
