@@ -12,7 +12,7 @@ project "SPIRVReflect"
     objdir (path.join(root, "bin-int/" .. outputdir .. "/%{prj.name}"))
     files { velos .. "/external/SPIRV-Reflect/spirv_reflect.h", velos .. "/external/SPIRV-Reflect/spirv_reflect.c" }
     includedirs { velos .. "/external/SPIRV-Reflect" }
-    filter "configurations:Debug"
+    filter "configurations:Debug or DebugLivePP"
         runtime "Debug"
         symbols "On"
     filter { "configurations:Release or Profile" }
@@ -50,7 +50,7 @@ project "GLFW"
         pic "On"
         defines { "_GLFW_X11" }
         files { glfw .. "/src/x11_*.*", glfw .. "/src/xkb_*.*", glfw .. "/src/glx_context.c", glfw .. "/src/linux_*.*", glfw .. "/src/posix_*.*" }
-    filter "configurations:Debug"
+    filter "configurations:Debug or DebugLivePP"
         runtime "Debug"
         symbols "On"
     filter { "configurations:Release or Profile" }
@@ -84,11 +84,11 @@ project "Velos"
         pic "On"
         defines { "VL_PLATFORM_LINUX" }
         links { "vulkan", "dl", "pthread", "X11", "Xrandr", "Xi", "Xxf86vm", "Xinerama", "Xcursor", "shaderc" }
-    filter "configurations:Debug"
+    filter "configurations:Debug or DebugLivePP"
         runtime "Debug"
         symbols "On"
         defines { "VL_DEBUG" }
-    filter { "system:windows", "configurations:Debug" }
+    filter { "system:windows", "configurations:Debug or DebugLivePP" }
         links { "shaderc_combinedd" }
     filter "configurations:Release"
         runtime "Release"

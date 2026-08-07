@@ -2,6 +2,7 @@
 /bin-int/
 /build/
 /.vs/
+/external/LivePP/
 *.sln
 *.slnx
 *.vcxproj*

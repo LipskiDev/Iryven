@@ -1,6 +1,9 @@
 #include <iryven/iryven.h>
+#include "development/development_session.h"
 
 int main() {
+    Iryven::Development::DevelopmentSession development;
+
     Iryven::Engine engine({
         .title = "Sandbox",
     });

@@ -1,7 +1,18 @@
+local livePPPath = "external/LivePP"
+local hasLivePP = os.isdir(livePPPath)
+local workspaceConfigurations = { "Debug", "Release", "Profile" }
+
+if hasLivePP then
+    table.insert(workspaceConfigurations, "DebugLivePP")
+    print("Live++ detected: enabling the DebugLivePP configuration")
+else
+    print("Live++ not found: DebugLivePP will not be generated")
+end
+
 workspace "Iryven"
     architecture "x86_64"
     startproject "Sandbox"
-    configurations { "Debug", "Release", "Profile" }
+    configurations (workspaceConfigurations)
     multiprocessorcompile "On"
 
 outputdir = "%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}"
@@ -41,10 +52,13 @@ project "Iryven"
     filter "system:linux"
         pic "On"
         defines { "IRYVEN_PLATFORM_LINUX" }
-    filter "configurations:Debug"
+    filter "configurations:Debug or DebugLivePP"
         runtime "Debug"
         symbols "On"
         defines { "IRYVEN_DEBUG" }
+    filter { "system:windows", "configurations:DebugLivePP" }
+        debugformat "C7"
+        buildoptions { "/Gm-", "/Gy", "/Gw" }
     filter "configurations:Release"
         runtime "Release"
         optimize "Speed"
@@ -64,6 +78,7 @@ project "Sandbox"
     staticruntime "off"
     targetdir ("bin/" .. outputdir .. "/%{prj.name}")
     objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+    debugdir (_WORKING_DIR)
     files { "sandbox/**.h", "sandbox/**.cpp" }
     includedirs (IryvenPublicIncludeDirs)
     defines (IryvenPublicDefines)
@@ -73,9 +88,15 @@ project "Sandbox"
         systemversion "latest"
         buildoptions { "/utf-8" }
 
-    filter "configurations:Debug"
+    filter "configurations:Debug or DebugLivePP"
         runtime "Debug"
         symbols "On"
+    filter { "system:windows", "configurations:DebugLivePP" }
+        debugformat "C7"
+        defines { "IRYVEN_WITH_LIVEPP" }
+        includedirs { "external" }
+        buildoptions { "/Gm-", "/Gy", "/Gw" }
+        linkoptions { "/FUNCTIONPADMIN", "/OPT:NOREF", "/OPT:NOICF", "/DEBUG:FULL" }
     filter { "configurations:Release or Profile" }
         runtime "Release"
         optimize "Speed"
@@ -96,7 +117,7 @@ project "IryvenTests"
     filter "system:windows"
         systemversion "latest"
         buildoptions { "/utf-8" }
-    filter "configurations:Debug"
+    filter "configurations:Debug or DebugLivePP"
         runtime "Debug"
         symbols "On"
     filter { "configurations:Release or Profile" }

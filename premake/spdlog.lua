@@ -31,7 +31,7 @@ project "spdlog"
         pic "On"
         links { "pthread" }
 
-    filter "configurations:Debug"
+    filter "configurations:Debug or DebugLivePP"
         runtime "Debug"
         symbols "On"
 
