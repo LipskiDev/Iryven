@@ -197,14 +197,22 @@ namespace Iryven {
 		}
 
 		const glm::mat4 modelViewProjection = viewProjection * object.transform;
+		struct DrawConstants {
+			glm::mat4 modelViewProjection;
+			glm::vec4 baseColor;
+		};
+		const DrawConstants drawConstants{
+			.modelViewProjection = modelViewProjection,
+			.baseColor = object.material ? object.material->baseColor.Vector() : Color::White.Vector()
+		};
 
 		auto& commands = device_->GetCommandList();
 		commands.BindPipeline(vertexColorPipeline_);
 		commands.PushConstants(
-			Velos::RHI::ShaderStage::Vertex,
+			Velos::RHI::ShaderStage::Vertex | Velos::RHI::ShaderStage::Fragment,
 			0,
-			static_cast<Velos::u32>(sizeof(modelViewProjection)),
-			&modelViewProjection);
+			static_cast<Velos::u32>(sizeof(drawConstants)),
+			&drawConstants);
 		commands.BindVertexBuffer(0, mesh->vertexBuffer);
 		commands.BindIndexBuffer(mesh->indexBuffer, Velos::RHI::IndexType::U32);
 		commands.DrawIndexed(mesh->indexCount);
@@ -288,20 +296,12 @@ namespace Iryven {
 		const Velos::RHI::VertexBufferLayoutDesc vertexLayout{
 			.stride = sizeof(Vertex),
 			.inputRate = Velos::RHI::VertexInputRate::PerVertex,
-			.attributes = {
-				{
-					.location = 0,
-					.binding = 0,
-					.format = Velos::RHI::VertexFormat::Float32x3,
-					.offset = offsetof(Vertex, position)
-				},
-				{
-					.location = 1,
-					.binding = 0,
-					.format = Velos::RHI::VertexFormat::Float32x3,
-					.offset = offsetof(Vertex, color)
-				}
-			}
+			.attributes = {{
+				.location = 0,
+				.binding = 0,
+				.format = Velos::RHI::VertexFormat::Float32x3,
+				.offset = offsetof(Vertex, position)
+			}}
 		};
 
 		vertexColorPipeline_ = device_->CreateGraphicsPipeline({

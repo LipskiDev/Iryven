@@ -13,6 +13,8 @@ int main() {
     });
 
     Iryven::World& world = engine.GetWorld();
+    auto cubeMesh = Iryven::PrimitiveMeshes::Cube();
+    auto material = engine.GetAssets().LoadMaterial("assets/materials/default.material");
 
     auto camera = world.CreateEntity("Camera");
     camera.Add<Iryven::Transform>(
@@ -36,47 +38,8 @@ int main() {
     );
     cube.Add<CubeController>();
     cube2.Add<CubeController>();
-    cube.Add<Iryven::MeshRenderer>(
-        std::vector<Iryven::Vertex>{
-            {{-0.75f, -0.75f, -0.75f}, {1.0f, 0.2f, 0.2f}},
-            {{ 0.75f, -0.75f, -0.75f}, {0.2f, 1.0f, 0.2f}},
-            {{ 0.75f,  0.75f, -0.75f}, {0.2f, 0.4f, 1.0f}},
-            {{-0.75f,  0.75f, -0.75f}, {1.0f, 0.8f, 0.2f}},
-            {{-0.75f, -0.75f,  0.75f}, {0.8f, 0.2f, 1.0f}},
-            {{ 0.75f, -0.75f,  0.75f}, {0.2f, 1.0f, 1.0f}},
-            {{ 0.75f,  0.75f,  0.75f}, {1.0f, 0.4f, 0.7f}},
-            {{-0.75f,  0.75f,  0.75f}, {0.6f, 1.0f, 0.3f}}
-        },
-        std::vector<std::uint32_t>{
-            4, 5, 6, 4, 6, 7,
-            1, 0, 3, 1, 3, 2,
-            0, 4, 7, 0, 7, 3,
-            5, 1, 2, 5, 2, 6,
-            3, 7, 6, 3, 6, 2,
-            0, 1, 5, 0, 5, 4
-        }
-    );
-
-    cube2.Add<Iryven::MeshRenderer>(
-        std::vector<Iryven::Vertex>{
-            {{-0.75f, -0.75f, -0.75f}, { 1.0f, 0.2f, 0.2f }},
-            { { 0.75f, -0.75f, -0.75f}, {0.2f, 1.0f, 0.2f} },
-            { { 0.75f,  0.75f, -0.75f}, {0.2f, 0.4f, 1.0f} },
-            { {-0.75f,  0.75f, -0.75f}, {1.0f, 0.8f, 0.2f} },
-            { {-0.75f, -0.75f,  0.75f}, {0.8f, 0.2f, 1.0f} },
-            { { 0.75f, -0.75f,  0.75f}, {0.2f, 1.0f, 1.0f} },
-            { { 0.75f,  0.75f,  0.75f}, {1.0f, 0.4f, 0.7f} },
-            { {-0.75f,  0.75f,  0.75f}, {0.6f, 1.0f, 0.3f} }
-    },
-        std::vector<std::uint32_t>{
-        4, 5, 6, 4, 6, 7,
-            1, 0, 3, 1, 3, 2,
-            0, 4, 7, 0, 7, 3,
-            5, 1, 2, 5, 2, 6,
-            3, 7, 6, 3, 6, 2,
-            0, 1, 5, 0, 5, 4
-    }
-    );
+    cube.Add<Iryven::MeshRenderer>(cubeMesh, material);
+    cube2.Add<Iryven::MeshRenderer>(cubeMesh, material);
 
     auto& input = engine.GetInput();
     world.AddSystem<Iryven::Transform, CubeController>(

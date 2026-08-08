@@ -96,4 +96,14 @@ InputHandler& Engine::GetInput()
     return input_;
 }
 
+AssetManager& Engine::GetAssets() noexcept
+{
+    return assets_;
+}
+
+const AssetManager& Engine::GetAssets() const noexcept
+{
+    return assets_;
+}
+
 } // namespace Iryven

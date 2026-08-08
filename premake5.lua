@@ -55,6 +55,11 @@ project "Iryven"
     defines (IryvenPublicDefines)
     links { "Velos", "spdlog", "Flecs" }
 
+    -- Shaders are compiled at runtime by Velos. Prevent Visual Studio from
+    -- sending Vulkan-flavoured HLSL through its legacy FXC build step.
+    filter "files:**.hlsl"
+        excludefrombuild "On"
+
     filter "system:windows"
         systemversion "latest"
         buildoptions { "/utf-8" }

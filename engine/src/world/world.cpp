@@ -49,6 +49,7 @@ namespace Iryven {
 				RenderObject object{
 					.transform = transform.ToMatrix(),
 					.mesh = meshRenderer.mesh,
+					.material = meshRenderer.material,
 				};
 
 				scene.objects.push_back(object);

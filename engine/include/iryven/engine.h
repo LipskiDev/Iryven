@@ -9,6 +9,7 @@
 #include <iryven/events/application_event.h>
 #include <iryven/window.h>
 #include <iryven/input/input.h>
+#include <iryven/asset_manager.h>
 
 
 namespace Iryven {
@@ -30,6 +31,8 @@ public:
     [[nodiscard]] const World& GetWorld() const noexcept;
     [[nodiscard]] const EngineConfig& GetConfig() const noexcept;
     InputHandler& GetInput();
+    [[nodiscard]] AssetManager& GetAssets() noexcept;
+    [[nodiscard]] const AssetManager& GetAssets() const noexcept;
 
     void Run();
 
@@ -46,6 +49,7 @@ private:
     std::unique_ptr<World> world_;
     bool running_ = true;
     InputHandler input_;
+    AssetManager assets_;
 };
 
 } // namespace Iryven
