@@ -1,15 +1,20 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
 
 #include <iryven/math/color.h>
+#include <iryven/rendering/frame_data.h>
 #include <iryven/rendering/render_scene.h>
 #include <iryven/window.h>
 #include <rhi/device.h>
 
 namespace Iryven {
+
+	constexpr uint32_t k_MaxLightSources = 128;
+	constexpr uint32_t k_FramesInFlight = 2;
 
 	class Renderer {
 	public:
@@ -26,9 +31,11 @@ namespace Iryven {
 		void BeginScenePass();
 		void DrawObject(
 			const RenderObject& object,
-			const glm::mat4& viewProjection);
+			const FrameData& frameData);
+		void UploadLights(const std::vector<RenderLight>& lights);
+		void UploadFrameData(const FrameData& frameData);
 		void EndFrame();
-		[[nodiscard]] glm::mat4 BuildViewProjection(
+		[[nodiscard]] FrameData BuildFrameData(
 			const RenderCamera& camera) const;
 
 		void CreatePipelineResources();
@@ -37,6 +44,8 @@ namespace Iryven {
 		void DestroyDepthResources();
 		void DestroyMeshResources();
 		void CollectUnusedMeshes();
+		void CreateBufferResources();
+		void DestroyBufferResources();
 
 		struct GpuMesh {
 			std::weak_ptr<const MeshData> source;
@@ -61,6 +70,17 @@ namespace Iryven {
 		Velos::RHI::ShaderHandle vertexColorVertexShader_;
 		Velos::RHI::ShaderHandle vertexColorFragmentShader_;
 		Velos::RHI::PipelineHandle vertexColorPipeline_;
+
+		struct FrameLightingResource {
+			Velos::RHI::BufferHandle lightBuffer;
+			Velos::RHI::BufferHandle frameDataBuffer;
+			Velos::RHI::BindingSetHandle lightBindingSet;
+		};
+
+		std::array<FrameLightingResource, k_FramesInFlight> lightingFrames_;
+
+		Velos::RHI::BindingLayoutHandle lightsBindingLayout_;
+		Velos::RHI::BindingPoolHandle lightsBindingPool_;
 
 		bool swapchainDirty_ = false;
 		bool frameActive_ = false;

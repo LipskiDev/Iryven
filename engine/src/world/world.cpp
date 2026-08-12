@@ -3,6 +3,7 @@
 #include <string>
 
 #include <glm/matrix.hpp>
+#include <glm/geometric.hpp>
 
 #include <iryven/scene/components/components.h>
 
@@ -53,6 +54,24 @@ namespace Iryven {
 				};
 
 				scene.objects.push_back(object);
+			}
+		);
+
+		auto lightQuery = world_.query<const Transform, const Light>();
+		lightQuery.each(
+			[&scene](const Transform& transform, const Light& light)
+			{
+				if (!light.enabled) return;
+				scene.lights.push_back(RenderLight{
+					.type = light.type,
+					.position = transform.position,
+					.direction = glm::normalize(transform.rotation * glm::vec3{ 0.0f, 0.0f, -1.0f }),
+					.color = light.color,
+					.intensity = light.intensity,
+					.range = light.range,
+					.innerConeAngle = light.innerConeAngle,
+					.outerConeAngle = light.outerConeAngle
+				});
 			}
 		);
 

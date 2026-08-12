@@ -6,6 +6,7 @@
 #include <iryven/material.h>
 #include <iryven/asset_manager.h>
 #include <iryven/rendering/primitive_meshes.h>
+#include <iryven/rendering/frame_data.h>
 #include <iryven/world.h>
 #include <iryven/window.h>
 #include <iryven/log.h>

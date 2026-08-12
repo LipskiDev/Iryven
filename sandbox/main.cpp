@@ -14,6 +14,7 @@ int main() {
 
     Iryven::World& world = engine.GetWorld();
     auto cubeMesh = Iryven::PrimitiveMeshes::Cube();
+    auto cylinderMesh = Iryven::PrimitiveMeshes::Cylinder();
     auto material = engine.GetAssets().LoadMaterial("assets/materials/default.material");
 
     auto camera = world.CreateEntity("Camera");
@@ -23,6 +24,18 @@ int main() {
         glm::vec3{ 1.0f }
     );
     camera.Add<Iryven::Camera>();
+
+    auto pointLight = world.CreateEntity("Point Light");
+    pointLight.Add<Iryven::Transform>(
+        glm::vec3{ 1.0f, 0.0f, 0.0f },
+        glm::quat{ 1.0f, 0.0f, 0.0f, 0.0f },
+        glm::vec3{ 1.0f }
+    );
+    pointLight.Add<Iryven::Light>(Iryven::Light{
+        .type = Iryven::LightType::Point,
+        .intensity = 4.0f,
+        .range = 5.0f
+    });
 
     auto cube = world.CreateEntity("Cube");
     auto cube2 = world.CreateEntity("Cube2");
@@ -39,7 +52,7 @@ int main() {
     cube.Add<CubeController>();
     cube2.Add<CubeController>();
     cube.Add<Iryven::MeshRenderer>(cubeMesh, material);
-    cube2.Add<Iryven::MeshRenderer>(cubeMesh, material);
+    cube2.Add<Iryven::MeshRenderer>(cylinderMesh, material);
 
     auto& input = engine.GetInput();
     world.AddSystem<Iryven::Transform, CubeController>(
