@@ -1,0 +1,43 @@
+#pragma once
+
+#include <flecs.h>
+#include <box3d/id.h>
+#include <iryven/scene/components/components.h>
+
+#include <unordered_map>
+
+namespace Iryven {
+	class PhysicsWorld {
+    public:
+        explicit PhysicsWorld(flecs::world& world);
+        ~PhysicsWorld();
+
+        PhysicsWorld(const PhysicsWorld&) = delete;
+        PhysicsWorld& operator=(const PhysicsWorld&) = delete;
+
+        void Update(float deltaTime);
+
+    private:
+        void Prepare();
+        void PushTransforms();
+        void SynchronizeTransforms();
+        void EnsureBodyExists(flecs::entity& entity, Transform& transform, RigidBody& rb, Collider& collider);
+
+        struct BodyRecord {
+            b3BodyId id{};
+            RigidBody rigidBody{};
+            Collider collider{};
+        };
+
+    private:
+        // Box3D state
+        b3WorldId worldId_;
+        flecs::world& entities_;
+        const float timeStep_ = 1 / 60.0f;
+        const uint32_t substepCount_ = 4;
+		std::unordered_map<flecs::entity_t, BodyRecord> bodies_;
+
+        float accumulator_ = 0.0f;
+
+	};
+}

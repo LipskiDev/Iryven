@@ -13,3 +13,6 @@
 [submodule "external/flecs"]
 	path = external/flecs
 	url = https://github.com/SanderMertens/flecs.git
+[submodule "external/box3d"]
+	path = external/box3d
+	url = https://github.com/erincatto/box3d.git

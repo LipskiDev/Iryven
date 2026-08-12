@@ -6,9 +6,14 @@
 #include <glm/geometric.hpp>
 
 #include <iryven/scene/components/components.h>
+#include "../physics/physics_world.h"
 
 
 namespace Iryven {
+
+	World::World() : physics_(std::make_unique<PhysicsWorld>(world_)) {}
+	World::~World() = default;
+
 	Entity World::CreateEntity(std::string_view name)
 	{
 		return Entity{ world_.entity(std::string{name}.c_str()) };
@@ -16,7 +21,9 @@ namespace Iryven {
 
 	bool World::Progress(float deltaTime)
 	{
-		return world_.progress(deltaTime);
+		const bool result = world_.progress(deltaTime);
+		physics_->Update(deltaTime);
+		return result;
 	}
 
 	RenderScene World::ExtractRenderScene() const

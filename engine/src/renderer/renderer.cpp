@@ -299,11 +299,14 @@ namespace Iryven {
 
 		const float aspectRatio = static_cast<float>(dimensions.width) /
 			static_cast<float>(dimensions.height);
-		const glm::mat4 projection = glm::perspectiveRH_ZO(
+		glm::mat4 projection = glm::perspectiveRH_ZO(
 			glm::radians(camera.verticalFov),
 			aspectRatio,
 			camera.nearPlane,
 			camera.farPlane);
+		// GLM's projection uses an upward-positive clip-space Y axis. Vulkan's
+		// framebuffer coordinates point downward, so flip Y at the projection.
+		projection[1][1] *= -1.0f;
 
 		return FrameData{
 			.view = camera.view,

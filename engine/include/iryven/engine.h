@@ -39,7 +39,7 @@ public:
 private:
     void OnEvent(Event& event);
     bool OnWindowClose(WindowCloseEvent& event);
-    void Update();
+    void Update(float deltaTime);
     void Render();
 
 private:

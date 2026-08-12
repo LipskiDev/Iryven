@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <functional>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -12,9 +13,15 @@
 
 namespace Iryven {
 
+class PhysicsWorld;
+
 class World {
 public:
-    World() = default;
+    World();
+    ~World();
+
+    World(const World&) = delete;
+    World& operator=(const World&) = delete;
 
     Entity CreateEntity(std::string_view name);
 
@@ -28,6 +35,7 @@ public:
     [[nodiscard]] RenderScene ExtractRenderScene() const;
 private:
     flecs::world world_;
+	std::unique_ptr<PhysicsWorld> physics_;
 };
 
 

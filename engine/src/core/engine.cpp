@@ -2,7 +2,7 @@
 #include <iryven/log.h>
 #include "../renderer/renderer.h"
 
-
+#include <chrono>
 #include <utility>
 #include <iryven/events/application_event.h>
 #include <iryven/events/keyboard_event.h>
@@ -50,12 +50,19 @@ const EngineConfig& Engine::GetConfig() const noexcept {
 
 void Engine::Run()
 {
-	while (running_) {
-		input_.BeginFrame();
-		window_->PollEvents();
+    auto previousTime = std::chrono::steady_clock::now();
+
+    while (running_) {
+        const auto now = std::chrono::steady_clock::now();
+        const float deltaTime =
+            std::chrono::duration<float>(now - previousTime).count();
+        previousTime = now;
+
+        input_.BeginFrame();
+        window_->PollEvents();
         input_.EvaluateActions();
 
-        Update();
+        Update(deltaTime);
         Render();
     }
 }
@@ -65,7 +72,6 @@ void Engine::OnEvent(Event& event)
 	input_.OnEvent(event);
 
 	EventDispatcher dispatcher(event);
-	//IRYVEN_CORE_TRACE("{0}", event);
 
     dispatcher.Dispatch<WindowCloseEvent>(
         [this](WindowCloseEvent& e) {
@@ -80,9 +86,9 @@ bool Engine::OnWindowClose(WindowCloseEvent& event)
     return true;
 }
 
-void Engine::Update()
+void Engine::Update(float deltaTime)
 {
-	world_->Progress();
+	world_->Progress(deltaTime);
 }
 
 void Engine::Render()
