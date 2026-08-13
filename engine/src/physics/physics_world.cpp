@@ -7,6 +7,8 @@
 #include <stdexcept>
 #include <unordered_set>
 
+#include <iryven/entity.h>
+
 namespace {
 
 bool SameRigidBody(const Iryven::RigidBody& a, const Iryven::RigidBody& b)
@@ -58,11 +60,18 @@ namespace Iryven {
 	void PhysicsWorld::Update(float deltaTime)
 	{
 		Prepare();
-		PushTransforms();
 		accumulator_ += std::min(deltaTime, 0.25f);
 
 		while (accumulator_ >= timeStep_) {
+			// Recalculate kinematic targets for every fixed step. Setting a target
+			// only once before several catch-up steps would keep the generated
+			// velocity active and allow the body to overshoot its game transform.
+			PushTransforms();
 			b3World_Step(worldId_, timeStep_, substepCount_);
+
+			ProcessSensorEvents();
+			ProcessContactEvents();
+
 			accumulator_ -= timeStep_;
 		}
 		SynchronizeTransforms();
@@ -111,10 +120,24 @@ namespace Iryven {
 						return;
 					}
 
-					b3Body_SetTransform(
-						body->second.id,
-						ToBox3D(transform.position),
-						ToBox3D(glm::normalize(transform.rotation)));
+					const b3Pos position = ToBox3D(transform.position);
+					const b3Quat rotation =
+						ToBox3D(glm::normalize(transform.rotation));
+
+					if (rigidBody.type == BodyType::Kinematic) {
+						// Drive kinematic bodies through the solver so they generate
+						// contacts and transfer motion to dynamic bodies.
+						b3Body_SetTargetTransform(
+							body->second.id,
+							b3WorldTransform{ position, rotation },
+							timeStep_,
+							true);
+					} else {
+						b3Body_SetTransform(
+							body->second.id,
+							position,
+							rotation);
+					}
 				});
 	}
 
@@ -195,10 +218,12 @@ namespace Iryven {
 		shapeDef.baseMaterial.friction = collider.friction;
 		shapeDef.baseMaterial.restitution = collider.restitution;
 		shapeDef.isSensor = collider.sensor;
-		shapeDef.enableSensorEvents = collider.sensor;
+		shapeDef.enableSensorEvents = true;
+		shapeDef.enableContactEvents = true;
 		shapeDef.filter.categoryBits = collider.categoryBits;
 		shapeDef.filter.maskBits = collider.maskBits;
 
+		b3ShapeId shapeId{};
 		switch (collider.type) {
 		case ColliderType::Box: {
 			if (collider.halfExtents.x <= 0.0f ||
@@ -211,7 +236,7 @@ namespace Iryven {
 				collider.halfExtents.x,
 				collider.halfExtents.y,
 				collider.halfExtents.z);
-			b3CreateHullShape(bodyId, &shapeDef, &box.base);
+			shapeId = b3CreateHullShape(bodyId, &shapeDef, &box.base);
 			break;
 		}
 		case ColliderType::Sphere: {
@@ -223,7 +248,7 @@ namespace Iryven {
 				.center = { 0.0f, 0.0f, 0.0f },
 				.radius = collider.radius
 			};
-			b3CreateSphereShape(bodyId, &shapeDef, &sphere);
+			shapeId = b3CreateSphereShape(bodyId, &shapeDef, &sphere);
 			break;
 		}
 		case ColliderType::Capsule: {
@@ -237,15 +262,157 @@ namespace Iryven {
 				.center2 = { 0.0f, collider.halfHeight, 0.0f },
 				.radius = collider.radius
 			};
-			b3CreateCapsuleShape(bodyId, &shapeDef, &capsule);
+			shapeId = b3CreateCapsuleShape(bodyId, &shapeDef, &capsule);
 			break;
 		}
 		}
 
 		bodies_.emplace(entityId, BodyRecord{
 			.id = bodyId,
+			.shapeId = shapeId,
 			.rigidBody = rb,
 			.collider = collider,
 		});
+	}
+
+	void PhysicsWorld::DispatchTriggerEnter(
+		flecs::entity_t selfId,
+		flecs::entity_t otherId)
+	{
+		flecs::entity self{ entities_, selfId };
+		flecs::entity other{ entities_, otherId };
+
+		if (!self.is_alive() || !other.is_alive()) {
+			return;
+		}
+
+		Collider* collider = self.try_get_mut<Collider>();
+		if (!collider || !collider->onTriggerEnter) {
+			return;
+		}
+
+		auto callback = collider->onTriggerEnter;
+		callback(Entity{ self }, Entity{ other });
+	}
+
+	void PhysicsWorld::DispatchTriggerExit(flecs::entity_t selfId, flecs::entity_t otherId)
+	{
+		flecs::entity self{ entities_, selfId };
+		flecs::entity other{ entities_, otherId };
+
+		if (!self.is_alive() || !other.is_alive()) {
+			return;
+		}
+
+		Collider* collider = self.try_get_mut<Collider>();
+		if (!collider || !collider->onTriggerExit) {
+			return;
+		}
+
+		auto callback = collider->onTriggerExit;
+		callback(Entity{ self }, Entity{ other });
+	}
+
+	void PhysicsWorld::DispatchCollisionEnter(
+		flecs::entity_t selfId,
+		flecs::entity_t otherId)
+	{
+		flecs::entity self{ entities_, selfId };
+		flecs::entity other{ entities_, otherId };
+		if (!self.is_alive() || !other.is_alive()) {
+			return;
+		}
+
+		Collider* collider = self.try_get_mut<Collider>();
+		if (!collider || !collider->onCollisionEnter) {
+			return;
+		}
+
+		auto callback = collider->onCollisionEnter;
+		callback(Entity{ self }, Entity{ other });
+	}
+
+	void PhysicsWorld::DispatchCollisionExit(
+		flecs::entity_t selfId,
+		flecs::entity_t otherId)
+	{
+		flecs::entity self{ entities_, selfId };
+		flecs::entity other{ entities_, otherId };
+		if (!self.is_alive() || !other.is_alive()) {
+			return;
+		}
+
+		Collider* collider = self.try_get_mut<Collider>();
+		if (!collider || !collider->onCollisionExit) {
+			return;
+		}
+
+		auto callback = collider->onCollisionExit;
+		callback(Entity{ self }, Entity{ other });
+	}
+
+	void PhysicsWorld::ProcessSensorEvents()
+	{
+		const b3SensorEvents events =
+			b3World_GetSensorEvents(worldId_);
+
+		for (int index = 0; index < events.beginCount; ++index) {
+			const b3SensorBeginTouchEvent& event =
+				events.beginEvents[index];
+
+			const flecs::entity_t sensorEntity =
+				GetEntityFromShape(event.sensorShapeId);
+
+			const flecs::entity_t visitorEntity =
+				GetEntityFromShape(event.visitorShapeId);
+
+			DispatchTriggerEnter(sensorEntity, visitorEntity);
+		}
+
+		for (int index = 0; index < events.endCount; ++index) {
+			const b3SensorEndTouchEvent& event =
+				events.endEvents[index];
+
+			const flecs::entity_t sensorEntity =
+				GetEntityFromShape(event.sensorShapeId);
+
+			const flecs::entity_t visitorEntity =
+				GetEntityFromShape(event.visitorShapeId);
+
+			DispatchTriggerExit(sensorEntity, visitorEntity);
+		}
+	}
+
+	void PhysicsWorld::ProcessContactEvents()
+	{
+		const b3ContactEvents events = b3World_GetContactEvents(worldId_);
+		for (int index = 0; index < events.beginCount; ++index) {
+			const auto& event = events.beginEvents[index];
+			const flecs::entity_t entityA = GetEntityFromShape(event.shapeIdA);
+			const flecs::entity_t entityB = GetEntityFromShape(event.shapeIdB);
+			DispatchCollisionEnter(entityA, entityB);
+			DispatchCollisionEnter(entityB, entityA);
+		}
+
+		for (int index = 0; index < events.endCount; ++index) {
+			const auto& event = events.endEvents[index];
+			const flecs::entity_t entityA = GetEntityFromShape(event.shapeIdA);
+			const flecs::entity_t entityB = GetEntityFromShape(event.shapeIdB);
+			DispatchCollisionExit(entityA, entityB);
+			DispatchCollisionExit(entityB, entityA);
+		}
+	}
+
+	flecs::entity_t PhysicsWorld::GetEntityFromShape(b3ShapeId shapeId) const
+	{
+		for (const auto& [entityId, record] : bodies_) {
+			// End-touch events may contain an invalid shape ID. Comparing the
+			// retained ID is safe and still lets us identify that entity.
+			if (B3_ID_EQUALS(record.shapeId, shapeId)) {
+				return entityId;
+			}
+		}
+
+		return 0;
 	}
 }

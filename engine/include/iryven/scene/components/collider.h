@@ -1,8 +1,11 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
+#include <utility>
 
 #include <glm/vec3.hpp>
+#include <iryven/entity.h>
 
 namespace Iryven {
 
@@ -51,6 +54,38 @@ struct Collider {
     bool sensor = false;
     std::uint64_t categoryBits = ~std::uint64_t{ 0 };
     std::uint64_t maskBits = ~std::uint64_t{ 0 };
+
+    using TriggerCallback = std::function<void(Entity self, Entity other)>;
+    TriggerCallback onTriggerEnter;
+    TriggerCallback onTriggerExit;
+    TriggerCallback onCollisionEnter;
+    TriggerCallback onCollisionExit;
+
+    Collider& OnTriggerEnter(TriggerCallback callback)
+    {
+        sensor = true;
+        onTriggerEnter = std::move(callback);
+        return *this;
+    }
+
+    Collider& OnTriggerExit(TriggerCallback callback)
+    {
+        sensor = true;
+        onTriggerExit = std::move(callback);
+        return *this;
+    }
+
+    Collider& OnCollisionEnter(TriggerCallback callback)
+    {
+        onCollisionEnter = std::move(callback);
+        return *this;
+    }
+
+    Collider& OnCollisionExit(TriggerCallback callback)
+    {
+        onCollisionExit = std::move(callback);
+        return *this;
+    }
 };
 
 } // namespace Iryven
