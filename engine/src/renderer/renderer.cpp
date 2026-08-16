@@ -72,12 +72,10 @@ namespace Iryven {
 		}
 	}
 
-	void Renderer::RenderFrame(const RenderScene& renderScene)
+	void Renderer::DrawScene(const RenderScene& renderScene)
 	{
-		CollectUnusedMeshes();
-
-		if (!BeginFrame()) {
-			return;
+		if (!frameActive_) {
+			throw std::logic_error("Renderer::DrawScene called outside an active frame");
 		}
 
 		BeginScenePass();
@@ -91,11 +89,12 @@ namespace Iryven {
 				DrawObject(object, frameData);
 			}
 		}
-		EndFrame();
 	}
 
 	bool Renderer::BeginFrame()
 	{
+		CollectUnusedMeshes();
+
 		const int width = window_.GetFramebufferWidth();
 		const int height = window_.GetFramebufferHeight();
 

@@ -39,6 +39,9 @@ namespace Iryven {
 			return GetCategoryFlags() & (int)category;
 		}
 
+		[[nodiscard]] bool IsHandled() const noexcept { return isHandled_; }
+		void SetHandled(bool handled = true) noexcept { isHandled_ = handled; }
+
 	protected:
 		bool isHandled_ = false;
 	};

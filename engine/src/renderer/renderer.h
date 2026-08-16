@@ -8,6 +8,7 @@
 #include <iryven/math/color.h>
 #include <iryven/rendering/frame_data.h>
 #include <iryven/rendering/render_scene.h>
+#include <iryven/rendering/render_context.h>
 #include <iryven/window.h>
 #include <rhi/device.h>
 
@@ -16,7 +17,7 @@ namespace Iryven {
 	constexpr uint32_t k_MaxLightSources = 128;
 	constexpr uint32_t k_FramesInFlight = 2;
 
-	class Renderer {
+	class Renderer final : public RenderContext {
 	public:
 		explicit Renderer(Window& window);
 		~Renderer();
@@ -24,17 +25,17 @@ namespace Iryven {
 		Renderer(const Renderer&) = delete;
 		Renderer& operator=(const Renderer&) = delete;
 
-		void RenderFrame(const RenderScene& renderScene);
+		[[nodiscard]] bool BeginFrame();
+		void DrawScene(const RenderScene& renderScene) override;
+		void EndFrame();
 
 	private:
-		bool BeginFrame();
 		void BeginScenePass();
 		void DrawObject(
 			const RenderObject& object,
 			const FrameData& frameData);
 		void UploadLights(const std::vector<RenderLight>& lights);
 		void UploadFrameData(const FrameData& frameData);
-		void EndFrame();
 		[[nodiscard]] FrameData BuildFrameData(
 			const RenderCamera& camera) const;
 

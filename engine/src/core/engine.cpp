@@ -3,6 +3,7 @@
 #include "../renderer/renderer.h"
 
 #include <chrono>
+#include <stdexcept>
 #include <utility>
 #include <iryven/events/application_event.h>
 #include <iryven/events/keyboard_event.h>
@@ -25,23 +26,27 @@ Engine::Engine(EngineConfig config)
             OnEvent(event);
         });
 
-    world_ = std::make_unique<World>();
+    gameLayer_ = &static_cast<GameLayer&>(
+        layers_.PushLayer(std::make_unique<GameLayer>()));
+    uiLayer_ = &static_cast<UILayer&>(
+        layers_.PushOverlay(std::make_unique<UILayer>()));
+    debugLayer_ = &static_cast<DebugLayer&>(
+        layers_.PushOverlay(std::make_unique<DebugLayer>()));
 }
 
 Engine::~Engine() = default;
 
 World& Engine::CreateWorld()
 {
-    world_ = std::make_unique<World>();
-    return *world_;
+    return gameLayer_->CreateWorld();
 }
 
 World& Engine::GetWorld() noexcept {
-    return *world_;
+    return gameLayer_->GetWorld();
 }
 
 const World& Engine::GetWorld() const noexcept {
-    return *world_;
+    return gameLayer_->GetWorld();
 }
 
 const EngineConfig& Engine::GetConfig() const noexcept {
@@ -78,6 +83,10 @@ void Engine::OnEvent(Event& event)
             return OnWindowClose(e);
         }
     );
+
+    if (!event.IsHandled()) {
+        layers_.PropagateEvent(event);
+    }
 }
 
 bool Engine::OnWindowClose(WindowCloseEvent& event)
@@ -88,13 +97,17 @@ bool Engine::OnWindowClose(WindowCloseEvent& event)
 
 void Engine::Update(float deltaTime)
 {
-	world_->Progress(deltaTime);
+    layers_.Update(deltaTime);
 }
 
 void Engine::Render()
 {
-    RenderScene scene = world_->ExtractRenderScene();
-    renderer_->RenderFrame(scene);
+    if (!renderer_->BeginFrame()) {
+        return;
+    }
+
+    layers_.Render(*renderer_);
+    renderer_->EndFrame();
 }
 
 InputHandler& Engine::GetInput()
@@ -110,6 +123,52 @@ AssetManager& Engine::GetAssets() noexcept
 const AssetManager& Engine::GetAssets() const noexcept
 {
     return assets_;
+}
+
+GameLayer& Engine::GetGameLayer() noexcept
+{
+    return *gameLayer_;
+}
+
+const GameLayer& Engine::GetGameLayer() const noexcept
+{
+    return *gameLayer_;
+}
+
+UILayer& Engine::GetUILayer() noexcept
+{
+    return *uiLayer_;
+}
+
+DebugLayer& Engine::GetDebugLayer() noexcept
+{
+    return *debugLayer_;
+}
+
+Layer& Engine::PushLayer(std::unique_ptr<Layer> layer)
+{
+    return layers_.PushLayer(std::move(layer));
+}
+
+Layer& Engine::PushOverlay(std::unique_ptr<Layer> overlay)
+{
+    return layers_.PushOverlay(std::move(overlay));
+}
+
+std::unique_ptr<Layer> Engine::PopLayer(Layer& layer)
+{
+    if (&layer == gameLayer_) {
+        throw std::invalid_argument("The engine-owned GameLayer cannot be removed");
+    }
+    return layers_.PopLayer(layer);
+}
+
+std::unique_ptr<Layer> Engine::PopOverlay(Layer& overlay)
+{
+    if (&overlay == uiLayer_ || &overlay == debugLayer_) {
+        throw std::invalid_argument("Engine-owned UI and Debug layers cannot be removed");
+    }
+    return layers_.PopOverlay(overlay);
 }
 
 } // namespace Iryven

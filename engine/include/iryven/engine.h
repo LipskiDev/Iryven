@@ -10,6 +10,10 @@
 #include <iryven/window.h>
 #include <iryven/input/input.h>
 #include <iryven/asset_manager.h>
+#include <iryven/layer_stack.h>
+#include <iryven/layers/game_layer.h>
+#include <iryven/layers/ui_layer.h>
+#include <iryven/layers/debug_layer.h>
 
 
 namespace Iryven {
@@ -33,6 +37,16 @@ public:
     InputHandler& GetInput();
     [[nodiscard]] AssetManager& GetAssets() noexcept;
     [[nodiscard]] const AssetManager& GetAssets() const noexcept;
+    [[nodiscard]] GameLayer& GetGameLayer() noexcept;
+    [[nodiscard]] const GameLayer& GetGameLayer() const noexcept;
+    [[nodiscard]] UILayer& GetUILayer() noexcept;
+    [[nodiscard]] DebugLayer& GetDebugLayer() noexcept;
+
+    Layer& PushLayer(std::unique_ptr<Layer> layer);
+    Layer& PushOverlay(std::unique_ptr<Layer> overlay);
+    // Engine-owned Game, UI, and Debug layers cannot be removed.
+    std::unique_ptr<Layer> PopLayer(Layer& layer);
+    std::unique_ptr<Layer> PopOverlay(Layer& overlay);
 
     void Run();
 
@@ -46,10 +60,13 @@ private:
     EngineConfig config_;
     std::unique_ptr<Window> window_;
     std::unique_ptr<Renderer> renderer_;
-    std::unique_ptr<World> world_;
     bool running_ = true;
     InputHandler input_;
     AssetManager assets_;
+    LayerStack layers_;
+    GameLayer* gameLayer_ = nullptr;
+    UILayer* uiLayer_ = nullptr;
+    DebugLayer* debugLayer_ = nullptr;
 };
 
 } // namespace Iryven

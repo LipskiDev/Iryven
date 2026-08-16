@@ -7,9 +7,15 @@
 #include <iryven/asset_manager.h>
 #include <iryven/rendering/primitive_meshes.h>
 #include <iryven/rendering/frame_data.h>
+#include <iryven/rendering/render_context.h>
 #include <iryven/world.h>
 #include <iryven/window.h>
 #include <iryven/log.h>
+#include <iryven/layer.h>
+#include <iryven/layer_stack.h>
+#include <iryven/layers/game_layer.h>
+#include <iryven/layers/ui_layer.h>
+#include <iryven/layers/debug_layer.h>
 #include <iryven/events/event.h>
 #include <iryven/events/mouse_event.h>
 #include <iryven/events/application_event.h>

@@ -1,6 +1,9 @@
 #include <iryven/iryven.h>
 
 #include <cassert>
+#include <memory>
+#include <string>
+#include <vector>
 
 #include <glm/common.hpp>
 
@@ -18,12 +21,56 @@ struct CollisionBodyBTag {
     bool enabled = true;
 };
 
+class TrackingLayer final : public Iryven::Layer {
+public:
+    TrackingLayer(
+        std::string name,
+        std::vector<std::string>& calls,
+        bool consumesEvents = false)
+        : Layer(std::move(name)), calls_(calls), consumesEvents_(consumesEvents) {}
+
+    void OnAttach() override { calls_.push_back(GetName() + ":attach"); }
+    void OnDetach() override { calls_.push_back(GetName() + ":detach"); }
+    void OnUpdate(float) override { calls_.push_back(GetName() + ":update"); }
+    bool OnEvent(Iryven::Event&) override
+    {
+        calls_.push_back(GetName() + ":event");
+        return consumesEvents_;
+    }
+
+private:
+    std::vector<std::string>& calls_;
+    bool consumesEvents_;
+};
+
 } // namespace
 
 int main()
 {
     const Iryven::EngineConfig config{ .title = "Test" };
     assert(config.title == "Test");
+
+    std::vector<std::string> layerCalls;
+    Iryven::LayerStack layers;
+    auto& gameLayer = layers.PushLayer(
+        std::make_unique<TrackingLayer>("game", layerCalls));
+    layers.PushOverlay(
+        std::make_unique<TrackingLayer>("ui", layerCalls, true));
+    layers.PushOverlay(
+        std::make_unique<TrackingLayer>("debug", layerCalls));
+    layers.Update(1.0f / 60.0f);
+
+    Iryven::AppTickEvent event;
+    layers.PropagateEvent(event);
+    assert(event.IsHandled());
+    assert((layerCalls == std::vector<std::string>{
+        "game:attach", "ui:attach", "debug:attach",
+        "game:update", "ui:update", "debug:update",
+        "debug:event", "ui:event" }));
+
+    auto removedGameLayer = layers.PopLayer(gameLayer);
+    assert(removedGameLayer);
+    assert(layerCalls.back() == "game:detach");
 
     const auto box = Iryven::Collider::Box({ 1.0f, 2.0f, 3.0f });
     assert(box.type == Iryven::ColliderType::Box);
