@@ -24,7 +24,9 @@ IryvenPublicIncludeDirs = {
     "external/velos/external/SPIRV-Reflect",
     "external/spdlog/include",
     "external/glm",
-    "external/flecs/distr"
+    "external/flecs/distr",
+    "external/msdf-atlas-gen",
+    "external/msdf-atlas-gen/msdfgen"
 }
 
 IryvenPublicDefines = {
@@ -35,6 +37,7 @@ include "premake/velos.lua"
 include "premake/spdlog.lua"
 include "premake/flecs.lua"
 include "premake/box3d.lua"
+include "premake/msdf.lua"
 
 project "Iryven"
     location "build/Iryven"
@@ -53,9 +56,12 @@ project "Iryven"
         "assets/shaders/internal/**.hlsl"
     }
     includedirs (IryvenPublicIncludeDirs)
-    includedirs { "external/glfw/include" }
+    includedirs {
+        "external/glfw/include",
+        "engine/src/third_party"
+    }
     defines (IryvenPublicDefines)
-    links { "Velos", "spdlog", "Flecs", "Box3D" }
+    links { "Velos", "spdlog", "Flecs", "Box3D", "MSDFAtlasGen" }
 
     -- Shaders are compiled at runtime by Velos. Prevent Visual Studio from
     -- sending Vulkan-flavoured HLSL through its legacy FXC build step.

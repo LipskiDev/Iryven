@@ -16,3 +16,9 @@
 [submodule "external/box3d"]
 	path = external/box3d
 	url = https://github.com/erincatto/box3d.git
+[submodule "external/msdf-atlas-gen"]
+	path = external/msdf-atlas-gen
+	url = https://github.com/Chlumsky/msdf-atlas-gen.git
+[submodule "external/freetype"]
+	path = external/freetype
+	url = https://github.com/freetype/freetype.git
