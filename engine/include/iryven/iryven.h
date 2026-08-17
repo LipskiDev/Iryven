@@ -21,3 +21,5 @@
 #include <iryven/events/application_event.h>
 #include <iryven/events/keyboard_event.h>
 #include <iryven/scene/components/components.h>
+#include <iryven/assets/font.h>
+#include <iryven/scene/components/components.h>

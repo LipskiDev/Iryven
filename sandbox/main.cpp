@@ -63,6 +63,18 @@ int main()
     Iryven::World& world = engine.GetWorld();
     Iryven::InputHandler& input = engine.GetInput();
 
+    auto font = std::make_shared<Iryven::Font>("assets/fonts/AppleGaramond.ttf");
+    uint32_t collectedCount = 0;
+    auto collectedCountUI = world.CreateEntity("FPS Counter");
+    collectedCountUI.Add<Iryven::UIText>(
+        Iryven::UIText{
+            .font = font,
+            .text = "Collected: 0",
+            .position = glm::vec2{100.0, 100.0},
+            .fontSize = 64.0f,
+            .color = Iryven::Color::Black
+        });
+
     const auto cubeMesh = Iryven::PrimitiveMeshes::Cube();
     const auto sphereMesh = Iryven::PrimitiveMeshes::Sphere();
     const auto groundMaterial = MakeMaterial("Ground", { 0.08f, 0.12f, 0.18f });
@@ -125,12 +137,11 @@ int main()
 	player.Add<Iryven::Collider>(
 		Iryven::Collider::Box({ 0.4f, 0.5f, 0.4f }));
 
-	int collectedCount = 0;
 	bool won = false;
 	for (auto& collectibleEntity : collectibles) {
 		auto collider = Iryven::Collider::Sphere(0.55f);
 		collider.OnTriggerEnter(
-			[&collectedCount, &won, winBeacon](
+			[&collectedCount, &won, winBeacon, collectedCountUI](
 				Iryven::Entity self,
 				Iryven::Entity other) mutable {
 				if (won || !other.Has<PlayerTag>()) {
@@ -145,12 +156,16 @@ int main()
 				collectible.collected = true;
 				self.Get<Iryven::Transform>().scale = glm::vec3{ 0.0f };
 				++collectedCount;
-				std::cout << "Collected " << collectedCount << "/5\n";
+                auto& text = collectedCountUI.Get<Iryven::UIText>();
+                text.text = std::string("Collected: ");
+                text.text.append(std::to_string(collectedCount));
 
 				if (collectedCount == 5) {
 					won = true;
 					winBeacon.Get<Iryven::Transform>().scale = glm::vec3{ 2.0f };
-					std::cout << "YOU WIN! All 5 collected.\n";
+                    text.text = std::string("YOU WIN! All 5 collected.");
+                    text.position = glm::vec2{ 370.0, 300.0 };
+                    text.color = Iryven::Color::Red;
 				}
 			});
 		collider.OnTriggerExit(

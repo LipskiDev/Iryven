@@ -82,6 +82,24 @@ namespace Iryven {
 			}
 		);
 
+		auto textQuery = world_.query<const UIText>();
+		textQuery.each(
+			[&scene](const UIText& text)
+			{
+				if (!text.font || !text.font->IsValid() || text.text.empty()) {
+					return;
+				}
+
+				scene.texts.push_back(RenderText{
+					.font = text.font,
+					.text = text.text,
+					.position = text.position,
+					.fontSize = text.fontSize,
+					.color = text.color
+				});
+			}
+		);
+
 		return scene;
 	}
 }

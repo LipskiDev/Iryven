@@ -5,8 +5,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <string_view>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/vector_uint4.hpp>
@@ -14,6 +16,59 @@
 
 #include <rhi/pipeline.h>
 #include <shader/shader_compiler.h>
+
+namespace {
+
+struct TextVertex {
+	glm::vec2 position;
+	glm::vec2 uv;
+	glm::vec4 color;
+};
+
+std::vector<char32_t> DecodeUtf8(std::string_view text)
+{
+	std::vector<char32_t> result;
+	result.reserve(text.size());
+	for (std::size_t i = 0; i < text.size();) {
+		const auto first = static_cast<std::uint8_t>(text[i]);
+		char32_t codepoint = U'\uFFFD';
+		std::size_t length = 1;
+		char32_t minimum = 0;
+		if (first < 0x80) {
+			codepoint = first;
+		}
+		else if ((first & 0xE0) == 0xC0) {
+			codepoint = first & 0x1F; length = 2; minimum = 0x80;
+		}
+		else if ((first & 0xF0) == 0xE0) {
+			codepoint = first & 0x0F; length = 3; minimum = 0x800;
+		}
+		else if ((first & 0xF8) == 0xF0) {
+			codepoint = first & 0x07; length = 4; minimum = 0x10000;
+		}
+
+		bool valid = i + length <= text.size();
+		for (std::size_t offset = 1; valid && offset < length; ++offset) {
+			const auto continuation = static_cast<std::uint8_t>(text[i + offset]);
+			if ((continuation & 0xC0) != 0x80) {
+				valid = false;
+				break;
+			}
+			codepoint = (codepoint << 6) | (continuation & 0x3F);
+		}
+		if (!valid || codepoint < minimum || codepoint > 0x10FFFF ||
+			(codepoint >= 0xD800 && codepoint <= 0xDFFF)) {
+			result.push_back(U'\uFFFD');
+			++i;
+			continue;
+		}
+		result.push_back(codepoint);
+		i += length;
+	}
+	return result;
+}
+
+} // namespace
 
 namespace Iryven {
 
@@ -63,6 +118,7 @@ namespace Iryven {
 
 		device_->WaitIdle();
 		DestroyMeshResources();
+		DestroyFontResources();
 		DestroyPipelineResources();
 		DestroyBufferResources();
 		DestroyDepthResources();
@@ -89,11 +145,16 @@ namespace Iryven {
 				DrawObject(object, frameData);
 			}
 		}
+
+		for (const RenderText& text : renderScene.texts) {
+			DrawText(text);
+		}
 	}
 
 	bool Renderer::BeginFrame()
 	{
 		CollectUnusedMeshes();
+		CollectUnusedFonts();
 
 		const int width = window_.GetFramebufferWidth();
 		const int height = window_.GetFramebufferHeight();
@@ -121,6 +182,12 @@ namespace Iryven {
 			swapchainDirty_ = true;
 			return false;
 		}
+
+		auto& retiredTextBuffers = textVertexBuffers_.at(frame_.frameIndex);
+		for (const auto buffer : retiredTextBuffers) {
+			device_->DestroyBuffer(buffer);
+		}
+		retiredTextBuffers.clear();
 
 		auto& commands = device_->GetCommandList();
 		commands.Begin();
@@ -225,6 +292,93 @@ namespace Iryven {
 		commands.BindVertexBuffer(0, mesh->vertexBuffer);
 		commands.BindIndexBuffer(mesh->indexBuffer, Velos::RHI::IndexType::U32);
 		commands.DrawIndexed(mesh->indexCount);
+	}
+
+	void Renderer::DrawText(const RenderText& text)
+	{
+		if (!scenePassActive_ || text.text.empty() || text.fontSize <= 0.0f) {
+			return;
+		}
+		GpuFont* gpuFont = ResolveOrCreateFont(text.font);
+		if (!gpuFont) {
+			return;
+		}
+
+		const auto dimensions = device_->GetSwapchainDimensions();
+		if (dimensions.width == 0 || dimensions.height == 0) {
+			return;
+		}
+
+		const float inverseAtlasWidth = 1.0f / text.font->GetAtlasWidth();
+		const float inverseAtlasHeight = 1.0f / text.font->GetAtlasHeight();
+		const float inverseScreenWidth = 1.0f / dimensions.width;
+		const float inverseScreenHeight = 1.0f / dimensions.height;
+		const glm::vec4 color = text.color.Vector();
+		glm::vec2 pen = text.position;
+		std::vector<TextVertex> vertices;
+		vertices.reserve(text.text.size() * 6);
+
+		for (const char32_t codepoint : DecodeUtf8(text.text)) {
+			if (codepoint == U'\r') {
+				continue;
+			}
+			if (codepoint == U'\n') {
+				pen.x = text.position.x;
+				pen.y += static_cast<float>(text.font->GetMetrics().lineHeight) * text.fontSize;
+				continue;
+			}
+
+			const Glyph* glyph = text.font->FindGlyph(codepoint);
+			if (!glyph) {
+				glyph = text.font->FindGlyph(U'?');
+			}
+			if (!glyph) {
+				continue;
+			}
+
+			const float left = pen.x + static_cast<float>(glyph->planeBounds.x) * text.fontSize;
+			const float bottom = pen.y - static_cast<float>(glyph->planeBounds.y) * text.fontSize;
+			const float right = pen.x + static_cast<float>(glyph->planeBounds.z) * text.fontSize;
+			const float top = pen.y - static_cast<float>(glyph->planeBounds.w) * text.fontSize;
+			const float x0 = left * inverseScreenWidth * 2.0f - 1.0f;
+			const float x1 = right * inverseScreenWidth * 2.0f - 1.0f;
+			const float y0 = top * inverseScreenHeight * 2.0f - 1.0f;
+			const float y1 = bottom * inverseScreenHeight * 2.0f - 1.0f;
+			const float u0 = static_cast<float>(glyph->atlasBounds.x) * inverseAtlasWidth;
+			const float v0 = static_cast<float>(glyph->atlasBounds.y) * inverseAtlasHeight;
+			const float u1 = static_cast<float>(glyph->atlasBounds.z) * inverseAtlasWidth;
+			const float v1 = static_cast<float>(glyph->atlasBounds.w) * inverseAtlasHeight;
+
+			if (left != right && top != bottom) {
+				vertices.insert(vertices.end(), {
+					{{x0, y0}, {u0, v1}, color},
+					{{x0, y1}, {u0, v0}, color},
+					{{x1, y1}, {u1, v0}, color},
+					{{x0, y0}, {u0, v1}, color},
+					{{x1, y1}, {u1, v0}, color},
+					{{x1, y0}, {u1, v1}, color}
+				});
+			}
+			pen.x += static_cast<float>(glyph->advance) * text.fontSize;
+		}
+
+		if (vertices.empty()) {
+			return;
+		}
+		const auto vertexBuffer = device_->CreateBuffer({
+			.size = vertices.size() * sizeof(TextVertex),
+			.usage = Velos::RHI::BufferUsage::Vertex,
+			.memoryUsage = Velos::RHI::MemoryUsage::CPUToGPU,
+			.initialData = vertices.data(),
+			.debugName = "Iryven text vertex buffer"
+		});
+		textVertexBuffers_.at(frame_.frameIndex).push_back(vertexBuffer);
+
+		auto& commands = device_->GetCommandList();
+		commands.BindPipeline(textPipeline_);
+		commands.SetBindings(textPipeline_, 0, gpuFont->bindingSet);
+		commands.BindVertexBuffer(0, vertexBuffer);
+		commands.Draw(static_cast<Velos::u32>(vertices.size()));
 	}
 
 	void Renderer::UploadLights(const std::vector<RenderLight>& lights)
@@ -413,6 +567,60 @@ namespace Iryven {
 			.colorFormat = Velos::RHI::Format::BGRA8_UNORM,
 			.debugName = "Iryven vertex color pipeline",
 		});
+
+		const auto textVertexShader = Velos::ShaderCompiler::CompileFile({
+			.path = "assets/shaders/internal/ui_text.hlsl",
+			.stage = Velos::RHI::ShaderStage::Vertex,
+			.entryPoint = "VSMain",
+			.language = Velos::ShaderSourceLanguage::HLSL,
+		});
+		const auto textFragmentShader = Velos::ShaderCompiler::CompileFile({
+			.path = "assets/shaders/internal/ui_text.hlsl",
+			.stage = Velos::RHI::ShaderStage::Fragment,
+			.entryPoint = "PSMain",
+			.language = Velos::ShaderSourceLanguage::HLSL,
+		});
+		textVertexShader_ = device_->CreateShader({
+			.stage = Velos::RHI::ShaderStage::Vertex,
+			.bytecode = textVertexShader.spirv.data(),
+			.bytecodeSize = static_cast<Velos::u64>(textVertexShader.spirv.size() * sizeof(std::uint32_t)),
+			.entryPoint = "VSMain",
+			.reflection = textVertexShader.reflection,
+			.debugName = "Iryven text vertex shader",
+		});
+		textFragmentShader_ = device_->CreateShader({
+			.stage = Velos::RHI::ShaderStage::Fragment,
+			.bytecode = textFragmentShader.spirv.data(),
+			.bytecodeSize = static_cast<Velos::u64>(textFragmentShader.spirv.size() * sizeof(std::uint32_t)),
+			.entryPoint = "PSMain",
+			.reflection = textFragmentShader.reflection,
+			.debugName = "Iryven text fragment shader",
+		});
+
+		const Velos::RHI::VertexBufferLayoutDesc textVertexLayout{
+			.stride = sizeof(TextVertex),
+			.inputRate = Velos::RHI::VertexInputRate::PerVertex,
+			.attributes = {
+				{.location = 0, .binding = 0, .format = Velos::RHI::VertexFormat::Float32x2, .offset = offsetof(TextVertex, position)},
+				{.location = 1, .binding = 0, .format = Velos::RHI::VertexFormat::Float32x2, .offset = offsetof(TextVertex, uv)},
+				{.location = 2, .binding = 0, .format = Velos::RHI::VertexFormat::Float32x4, .offset = offsetof(TextVertex, color)}
+			}
+		};
+		textPipeline_ = device_->CreateGraphicsPipeline({
+			.vertexShader = textVertexShader_,
+			.fragmentShader = textFragmentShader_,
+			.vertexLayouts = {textVertexLayout},
+			.layout = {
+				.descriptorSetLayouts = &fontBindingLayout_,
+				.descriptorSetLayoutCount = 1
+			},
+			.topology = Velos::RHI::PrimitiveTopology::TriangleList,
+			.raster = {.cullBackFaces = false},
+			.depth = {.depthTestEnable = false, .depthWriteEnable = false},
+			.blend = {.enable = true},
+			.colorFormat = Velos::RHI::Format::BGRA8_UNORM,
+			.debugName = "Iryven text pipeline",
+		});
 	}
 
 	void Renderer::CreateDepthResources(std::uint32_t width, std::uint32_t height)
@@ -453,6 +661,18 @@ namespace Iryven {
 
 	void Renderer::DestroyPipelineResources()
 	{
+		if (textPipeline_) {
+			device_->DestroyPipeline(textPipeline_);
+			textPipeline_ = {};
+		}
+		if (textFragmentShader_) {
+			device_->DestroyShader(textFragmentShader_);
+			textFragmentShader_ = {};
+		}
+		if (textVertexShader_) {
+			device_->DestroyShader(textVertexShader_);
+			textVertexShader_ = {};
+		}
 		if (vertexColorPipeline_) {
 			device_->DestroyPipeline(vertexColorPipeline_);
 			vertexColorPipeline_ = {};
@@ -519,6 +739,109 @@ namespace Iryven {
 		return &entry->second;
 	}
 
+	Renderer::GpuFont* Renderer::ResolveOrCreateFont(const std::shared_ptr<const Font>& font)
+	{
+		if (!font || !font->IsValid()) {
+			return nullptr;
+		}
+
+		if (const auto existing = fonts_.find(font.get()); existing != fonts_.end()) {
+			return &existing->second;
+		}
+
+		const auto pixels = font->GetAtlasPixels();
+
+		const std::uint32_t width = font->GetAtlasWidth();
+		const std::uint32_t height = font->GetAtlasHeight();
+
+		const std::size_t expectedSize =
+			static_cast<std::size_t>(width) * height * 4;
+
+		if (pixels.size() != expectedSize) {
+			return nullptr;
+		}
+
+		const auto atlasImage = device_->CreateImage({
+			.width = width,
+			.height = height,
+			.format = Velos::RHI::Format::RGBA8_UNORM,
+			.usage = Velos::RHI::ImageUsage::TransferDst |
+					 Velos::RHI::ImageUsage::Sampled,
+			.debugName = "Iryven font MTSDF atlas"
+			});
+
+		Velos::RHI::ImageViewHandle atlasView;
+		Velos::RHI::SamplerHandle atlasSampler;
+		Velos::RHI::BindingSetHandle bindingSet;
+		try {
+			auto upload = device_->CreateUploadContext(pixels.size());
+			upload->Begin();
+			upload->UploadImage(
+				{
+					.dstImage = atlasImage,
+					.finalLayout = Velos::RHI::ImageLayout::ShaderReadOnly,
+					.width = width,
+					.height = height
+				},
+				pixels.data(),
+				pixels.size()
+			);
+			upload->Flush();
+
+			atlasView = device_->CreateImageView({
+				.image = atlasImage,
+				.format = Velos::RHI::Format::RGBA8_UNORM,
+				.aspect = Velos::RHI::ImageAspect::Color,
+				.debugName = "Iryven font MTSDF atlas view"
+			});
+			atlasSampler = device_->CreateSampler({
+				.minFilter = Velos::RHI::Filter::Linear,
+				.magFilter = Velos::RHI::Filter::Linear,
+				.addressU = Velos::RHI::SamplerAddressMode::ClampToEdge,
+				.addressV = Velos::RHI::SamplerAddressMode::ClampToEdge,
+				.addressW = Velos::RHI::SamplerAddressMode::ClampToEdge,
+				.debugName = "Iryven font atlas sampler"
+			});
+			bindingSet = device_->AllocateBindingSet({
+				.pool = fontBindingPool_,
+				.layout = fontBindingLayout_,
+				.debugName = "Iryven font binding set"
+			});
+			const Velos::RHI::BindingImageInfo imageInfo{
+				.sampler = atlasSampler,
+				.imageView = atlasView,
+				.imageLayout = Velos::RHI::ImageLayout::ShaderReadOnly
+			};
+			device_->UpdateBindingSet({
+				.dstSet = bindingSet,
+				.binding = 0,
+				.type = Velos::RHI::BindingType::CombinedImageSampler,
+				.imageInfo = &imageInfo
+			});
+		}
+		catch (...) {
+			if (atlasSampler) {
+				device_->DestroySampler(atlasSampler);
+			}
+			if (atlasView) {
+				device_->DestroyImageView(atlasView);
+			}
+			device_->DestroyImage(atlasImage);
+			throw;
+		}
+
+		GpuFont gpuFont{
+			.source = font,
+			.atlasImage = atlasImage,
+			.atlasView = atlasView,
+			.atlasSampler = atlasSampler,
+			.bindingSet = bindingSet
+		};
+
+		auto [entry, inserted] = fonts_.emplace(font.get(), std::move(gpuFont));
+		return &entry->second;
+	}
+
 	void Renderer::CollectUnusedMeshes()
 	{
 		for (auto it = meshes_.begin(); it != meshes_.end();) {
@@ -533,8 +856,45 @@ namespace Iryven {
 		}
 	}
 
+	void Renderer::CollectUnusedFonts()
+	{
+		for (auto it = fonts_.begin(); it != fonts_.end();) {
+			if (!it->second.source.expired()) {
+				++it;
+				continue;
+			}
+
+			device_->DestroySampler(it->second.atlasSampler);
+			device_->DestroyImageView(it->second.atlasView);
+			device_->DestroyImage(it->second.atlasImage);
+			it = fonts_.erase(it);
+		}
+	}
+
 	void Renderer::CreateBufferResources()
 	{
+		const Velos::RHI::BindingDesc fontBinding{
+			.binding = 0,
+			.type = Velos::RHI::BindingType::CombinedImageSampler,
+			.count = 1,
+			.visibility = Velos::RHI::ShaderStage::Fragment
+		};
+		fontBindingLayout_ = device_->CreateBindingLayout({
+			.bindings = &fontBinding,
+			.bindingCount = 1,
+			.debugName = "Iryven font binding layout"
+		});
+		const Velos::RHI::BindingPoolSize fontPoolSize{
+			.type = Velos::RHI::BindingType::CombinedImageSampler,
+			.count = 256
+		};
+		fontBindingPool_ = device_->CreateBindingPool({
+			.poolSizes = &fontPoolSize,
+			.poolSizeCount = 1,
+			.maxSets = 256,
+			.debugName = "Iryven font binding pool"
+		});
+
 		constexpr std::uint64_t gpuLightSize = sizeof(glm::vec4) * 4;
 		constexpr std::uint64_t lightsBufferSize = sizeof(glm::uvec4) + gpuLightSize * k_MaxLightSources;
 		const Velos::RHI::BindingDesc bindings[]{
@@ -613,6 +973,20 @@ namespace Iryven {
 
 	void Renderer::DestroyBufferResources()
 	{
+		for (auto& buffers : textVertexBuffers_) {
+			for (const auto buffer : buffers) {
+				device_->DestroyBuffer(buffer);
+			}
+			buffers.clear();
+		}
+		if (fontBindingPool_) {
+			device_->DestroyBindingPool(fontBindingPool_);
+			fontBindingPool_ = {};
+		}
+		if (fontBindingLayout_) {
+			device_->DestroyBindingLayout(fontBindingLayout_);
+			fontBindingLayout_ = {};
+		}
 		if (lightsBindingPool_.IsValid()) {
 			device_->DestroyBindingPool(lightsBindingPool_);
 			lightsBindingPool_ = {};
@@ -641,6 +1015,16 @@ namespace Iryven {
 			device_->DestroyBuffer(mesh.vertexBuffer);
 		}
 		meshes_.clear();
+	}
+
+	void Renderer::DestroyFontResources()
+	{
+		for (const auto& [source, font] : fonts_) {
+			device_->DestroySampler(font.atlasSampler);
+			device_->DestroyImageView(font.atlasView);
+			device_->DestroyImage(font.atlasImage);
+		}
+		fonts_.clear();
 	}
 
 }

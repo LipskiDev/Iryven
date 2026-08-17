@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
+#include <vector>
 
 #include <iryven/math/color.h>
 #include <iryven/rendering/frame_data.h>
@@ -11,6 +12,7 @@
 #include <iryven/rendering/render_context.h>
 #include <iryven/window.h>
 #include <rhi/device.h>
+#include <iryven/assets/font.h>
 
 namespace Iryven {
 
@@ -34,6 +36,7 @@ namespace Iryven {
 		void DrawObject(
 			const RenderObject& object,
 			const FrameData& frameData);
+		void DrawText(const RenderText& text);
 		void UploadLights(const std::vector<RenderLight>& lights);
 		void UploadFrameData(const FrameData& frameData);
 		[[nodiscard]] FrameData BuildFrameData(
@@ -45,8 +48,10 @@ namespace Iryven {
 		void DestroyDepthResources();
 		void DestroyMeshResources();
 		void CollectUnusedMeshes();
+		void CollectUnusedFonts();
 		void CreateBufferResources();
 		void DestroyBufferResources();
+		void DestroyFontResources();
 
 		struct GpuMesh {
 			std::weak_ptr<const MeshData> source;
@@ -55,8 +60,19 @@ namespace Iryven {
 			std::uint32_t indexCount = 0;
 		};
 
+		struct GpuFont {
+			std::weak_ptr<const Font> source;
+
+			Velos::RHI::ImageHandle atlasImage;
+			Velos::RHI::ImageViewHandle atlasView;
+			Velos::RHI::SamplerHandle atlasSampler;
+			Velos::RHI::BindingSetHandle bindingSet;
+		};
+
 		[[nodiscard]] GpuMesh* ResolveOrCreateMesh(
 			const std::shared_ptr<const MeshData>& mesh);
+		[[nodiscard]] GpuFont* ResolveOrCreateFont(
+			const std::shared_ptr<const Font>& font);
 
 	private:
 		Window& window_;
@@ -68,9 +84,17 @@ namespace Iryven {
 		Velos::RHI::ImageViewHandle depthView_;
 
 		std::unordered_map<const MeshData*, GpuMesh> meshes_;
+		std::unordered_map<const Font*, GpuFont> fonts_;
 		Velos::RHI::ShaderHandle vertexColorVertexShader_;
 		Velos::RHI::ShaderHandle vertexColorFragmentShader_;
 		Velos::RHI::PipelineHandle vertexColorPipeline_;
+		Velos::RHI::ShaderHandle textVertexShader_;
+		Velos::RHI::ShaderHandle textFragmentShader_;
+		Velos::RHI::PipelineHandle textPipeline_;
+		Velos::RHI::BindingLayoutHandle fontBindingLayout_;
+		Velos::RHI::BindingPoolHandle fontBindingPool_;
+		std::array<std::vector<Velos::RHI::BufferHandle>, k_FramesInFlight>
+			textVertexBuffers_;
 
 		struct FrameLightingResource {
 			Velos::RHI::BufferHandle lightBuffer;
