@@ -1,0 +1,37 @@
+{
+  "asset": { "version": "2.0" },
+  "scene": 0,
+  "scenes": [{ "nodes": [0] }],
+  "nodes": [{ "name": "Triangle Node", "mesh": 0, "translation": [2, 0, 0] }],
+  "meshes": [{
+    "name": "Triangle Mesh",
+    "primitives": [{ "attributes": { "POSITION": 0 }, "indices": 1, "material": 0 }]
+  }],
+  "images": [{
+    "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+  }],
+  "samplers": [{ "magFilter": 9728, "minFilter": 9987, "wrapS": 33071, "wrapT": 33648 }],
+  "textures": [{ "sampler": 0, "source": 0 }],
+  "materials": [{
+    "name": "Test Material",
+    "pbrMetallicRoughness": {
+      "baseColorFactor": [0.8, 0.7, 0.6, 1.0],
+      "metallicFactor": 0.25,
+      "roughnessFactor": 0.75,
+      "baseColorTexture": { "index": 0 },
+      "metallicRoughnessTexture": { "index": 0 }
+    }
+  }],
+  "buffers": [{
+    "byteLength": 42,
+    "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAABAAIA"
+  }],
+  "bufferViews": [
+    { "buffer": 0, "byteOffset": 0, "byteLength": 36 },
+    { "buffer": 0, "byteOffset": 36, "byteLength": 6 }
+  ],
+  "accessors": [
+    { "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0, 0, 0], "max": [1, 1, 0] },
+    { "bufferView": 1, "componentType": 5123, "count": 3, "type": "SCALAR" }
+  ]
+}

@@ -47,6 +47,83 @@ private:
 
 int main()
 {
+    const auto texture = std::make_shared<const Iryven::Texture>(Iryven::Texture{
+        .width = 1,
+        .height = 1,
+        .colorSpace = Iryven::TextureColorSpace::SRGB,
+        .pixels = { 255, 255, 255, 255 },
+    });
+    assert(texture->IsValid());
+    assert(texture->ExpectedByteSize() == 4);
+
+    Iryven::AssetManager textureAssets;
+    textureAssets.StoreTexture("virtual/white.png", texture);
+    assert(textureAssets.GetTexture("virtual/white.png") == texture);
+    assert(textureAssets.GetTexture(
+        "virtual/white.png", Iryven::TextureColorSpace::Linear) == nullptr);
+
+    const auto model = std::make_shared<const Iryven::Model>(Iryven::Model{
+        .vertices = {
+            { .position = { 0.0f, 0.0f, 0.0f } },
+            { .position = { 1.0f, 0.0f, 0.0f } },
+            { .position = { 0.0f, 1.0f, 0.0f } },
+        },
+        .indices = { 0, 1, 2 },
+        .meshes = { Iryven::Mesh{
+            .name = "Triangle",
+            .primitives = { Iryven::MeshPrimitive{ .indexCount = 3 } },
+        } },
+        .nodes = { Iryven::ModelNode{ .name = "Triangle", .meshIndex = 0 } },
+        .sceneRoots = { 0 },
+    });
+    assert(model->IsValid());
+
+    Iryven::World modelWorld;
+    auto modelEntity = modelWorld.CreateEntity("Model");
+    modelEntity.Add<Iryven::Transform>();
+    modelEntity.Add<Iryven::MeshRenderer>(model);
+    const Iryven::RenderScene extractedModelScene = modelWorld.ExtractRenderScene();
+    assert(extractedModelScene.objects.size() == 1);
+    assert(extractedModelScene.objects.front().model == model);
+    assert(extractedModelScene.objects.front().indexCount == 3);
+
+    Iryven::AssetManager gltfAssets;
+    const Iryven::ModelHandle gltfModel = gltfAssets.LoadModel("tests/assets/basic_triangle.gltf");
+    assert(gltfModel && gltfModel->IsValid());
+    assert(gltfModel->vertices.size() == 3);
+    assert(gltfModel->indices == std::vector<std::uint32_t>({ 0, 1, 2 }));
+    assert(gltfModel->meshes.size() == 1);
+    assert(gltfModel->meshes.front().primitives.front().indexCount == 3);
+    assert(gltfModel->nodes.size() == 1);
+    assert(gltfModel->nodes.front().localTransform[3].x == 2.0f);
+    assert(gltfModel->materials.size() == 1);
+    const auto& gltfMaterial = gltfModel->materials.front();
+    assert(gltfMaterial->metallic == 0.25f);
+    assert(gltfMaterial->roughness == 0.75f);
+    assert(gltfMaterial->baseColorTexture != Iryven::InvalidTextureIndex);
+    assert(gltfMaterial->metallicRoughnessTexture != Iryven::InvalidTextureIndex);
+    assert(gltfMaterial->baseColorTexture != gltfMaterial->metallicRoughnessTexture);
+    assert(gltfModel->textureRegistry.textures.size() == 2);
+    assert(gltfModel->textureRegistry.samplers.size() == 2);
+    const auto& baseColorTexture = gltfModel->textureRegistry.textures[
+        gltfMaterial->baseColorTexture];
+    const auto& metallicRoughnessTexture = gltfModel->textureRegistry.textures[
+        gltfMaterial->metallicRoughnessTexture];
+    assert(baseColorTexture.texture->colorSpace == Iryven::TextureColorSpace::SRGB);
+    assert(metallicRoughnessTexture.texture->colorSpace == Iryven::TextureColorSpace::Linear);
+    assert(baseColorTexture.samplerIndex == metallicRoughnessTexture.samplerIndex);
+    const auto& gltfSampler = gltfModel->textureRegistry.samplers[baseColorTexture.samplerIndex];
+    assert(gltfSampler.magFilter == Iryven::TextureFilter::Nearest);
+    assert(gltfSampler.minFilter == Iryven::TextureFilter::LinearMipmapLinear);
+    assert(gltfSampler.wrapU == Iryven::TextureWrap::ClampToEdge);
+    assert(gltfSampler.wrapV == Iryven::TextureWrap::MirroredRepeat);
+
+    const Iryven::ModelHandle objModel = gltfAssets.LoadModel("assets/models/cube.obj");
+    assert(objModel && objModel->IsValid());
+    assert(objModel->meshes.size() == 1);
+    assert(!objModel->vertices.empty());
+    assert(!objModel->indices.empty());
+
     const Iryven::EngineConfig config{ .title = "Test" };
     assert(config.title == "Test");
 

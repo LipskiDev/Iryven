@@ -9,3 +9,4 @@
 Makefile
 *.make
 *.ttf
+runtime-startup-*.log

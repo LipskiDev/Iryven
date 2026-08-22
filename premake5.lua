@@ -38,6 +38,7 @@ include "premake/spdlog.lua"
 include "premake/flecs.lua"
 include "premake/box3d.lua"
 include "premake/msdf.lua"
+include "premake/fastgltf.lua"
 
 project "Iryven"
     location "build/Iryven"
@@ -58,10 +59,12 @@ project "Iryven"
     includedirs (IryvenPublicIncludeDirs)
     includedirs {
         "external/glfw/include",
+        "external/velos/external/stb",
+        "external/fastgltf/include",
         "engine/src/third_party"
     }
     defines (IryvenPublicDefines)
-    links { "Velos", "spdlog", "Flecs", "Box3D", "MSDFAtlasGen" }
+    links { "Velos", "spdlog", "Flecs", "Box3D", "MSDFAtlasGen", "fastgltf" }
 
     -- Shaders are compiled at runtime by Velos. Prevent Visual Studio from
     -- sending Vulkan-flavoured HLSL through its legacy FXC build step.

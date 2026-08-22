@@ -18,8 +18,9 @@ struct MeshRenderer {
     }
 
     explicit MeshRenderer(ModelHandle model, MaterialHandle material = {})
-        : mesh(model ? model->mesh : nullptr), model(std::move(model)), material(std::move(material)) {
-        if (!mesh) throw std::invalid_argument("MeshRenderer requires a model with mesh data");
+        : model(std::move(model)), material(std::move(material)) {
+        if (!this->model || !this->model->IsValid())
+            throw std::invalid_argument("MeshRenderer requires valid model data");
     }
 
     MeshRenderer(std::vector<Vertex> vertices, std::vector<std::uint32_t> indices)

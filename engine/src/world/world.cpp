@@ -1,6 +1,7 @@
 #include <iryven/world.h>
 
 #include <string>
+#include <functional>
 
 #include <glm/matrix.hpp>
 #include <glm/geometric.hpp>
@@ -54,6 +55,33 @@ namespace Iryven {
 				const Transform& transform,
 				const MeshRenderer& meshRenderer)
 			{
+				if (meshRenderer.model) {
+					const ModelHandle& model = meshRenderer.model;
+					std::function<void(std::uint32_t, const glm::mat4&)> visitNode;
+					visitNode = [&](std::uint32_t nodeIndex, const glm::mat4& parentTransform) {
+						const ModelNode& node = model->nodes[nodeIndex];
+						const glm::mat4 objectTransform = parentTransform * node.localTransform;
+						if (node.meshIndex != InvalidModelIndex) {
+							for (const MeshPrimitive& primitive : model->meshes[node.meshIndex].primitives) {
+								MaterialHandle material = meshRenderer.material;
+								if (!material && primitive.materialIndex != InvalidModelIndex)
+									material = model->materials[primitive.materialIndex];
+								scene.objects.push_back(RenderObject{
+									.transform = objectTransform,
+									.model = model,
+									.firstIndex = primitive.firstIndex,
+									.indexCount = primitive.indexCount,
+									.vertexOffset = primitive.vertexOffset,
+									.material = std::move(material),
+								});
+							}
+						}
+						for (std::uint32_t child : node.children) visitNode(child, objectTransform);
+					};
+					for (std::uint32_t root : model->sceneRoots)
+						visitNode(root, transform.ToMatrix());
+					return;
+				}
 				RenderObject object{
 					.transform = transform.ToMatrix(),
 					.mesh = meshRenderer.mesh,
