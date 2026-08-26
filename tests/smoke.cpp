@@ -6,6 +6,7 @@
 #include <vector>
 
 #include <glm/common.hpp>
+#include <shader/shader_compiler.h>
 
 namespace {
 
@@ -47,6 +48,21 @@ private:
 
 int main()
 {
+	const auto bindlessVertexShader = Velos::ShaderCompiler::CompileFile({
+		.path = "assets/shaders/internal/gltf.vert",
+		.stage = Velos::RHI::ShaderStage::Vertex,
+		.entryPoint = "main",
+		.language = Velos::ShaderSourceLanguage::GLSL,
+	});
+	const auto bindlessFragmentShader = Velos::ShaderCompiler::CompileFile({
+		.path = "assets/shaders/internal/gltf_bindless.frag",
+		.stage = Velos::RHI::ShaderStage::Fragment,
+		.entryPoint = "main",
+		.language = Velos::ShaderSourceLanguage::GLSL,
+	});
+	assert(!bindlessVertexShader.spirv.empty());
+	assert(!bindlessFragmentShader.spirv.empty());
+
     const auto texture = std::make_shared<const Iryven::Texture>(Iryven::Texture{
         .width = 1,
         .height = 1,

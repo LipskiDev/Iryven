@@ -13,6 +13,7 @@
 #include <iryven/window.h>
 #include <rhi/device.h>
 #include <iryven/assets/font.h>
+#include "bindless_texture_manager.h"
 
 namespace Iryven {
 
@@ -49,10 +50,13 @@ namespace Iryven {
 		void DestroyDepthResources();
 		void DestroyMeshResources();
 		void CollectUnusedMeshes();
+		void CollectRetiredModels(std::uint64_t completedSubmission);
 		void CollectUnusedFonts();
 		void CreateBufferResources();
 		void DestroyBufferResources();
 		void DestroyFontResources();
+		void CreateBindlessResources();
+		void DestroyBindlessResources();
 
 		struct GpuMesh {
 			std::weak_ptr<const MeshData> source;
@@ -67,8 +71,11 @@ namespace Iryven {
 			std::vector<Velos::RHI::ImageHandle> textureImages;
 			std::vector<Velos::RHI::ImageViewHandle> textureViews;
 			std::vector<Velos::RHI::SamplerHandle> samplers;
-			std::unordered_map<const Material*, Velos::RHI::BindingSetHandle>
-				materialBindingSets;
+			std::vector<BindlessTextureIndex> bindlessTextureIndices;
+		};
+		struct RetiredModel {
+			GpuModel resources;
+			std::uint64_t retirementSubmission = 0;
 		};
 
 		struct GpuFont {
@@ -85,6 +92,7 @@ namespace Iryven {
 		[[nodiscard]] GpuModel* ResolveOrCreateModel(const ModelHandle& model);
 		[[nodiscard]] GpuFont* ResolveOrCreateFont(
 			const std::shared_ptr<const Font>& font);
+		void DestroyGpuModel(GpuModel& model);
 
 	private:
 		Window& window_;
@@ -98,6 +106,7 @@ namespace Iryven {
 		std::unordered_map<const MeshData*, GpuMesh> meshes_;
 		std::unordered_map<const Font*, GpuFont> fonts_;
 		std::unordered_map<const Model*, GpuModel> models_;
+		std::vector<RetiredModel> retiredModels_;
 		Velos::RHI::ShaderHandle gltfVertexShader_;
 		Velos::RHI::ShaderHandle gltfFragmentShader_;
 		Velos::RHI::PipelineHandle gltfPipeline_;
@@ -106,14 +115,6 @@ namespace Iryven {
 		Velos::RHI::PipelineHandle textPipeline_;
 		Velos::RHI::BindingLayoutHandle fontBindingLayout_;
 		Velos::RHI::BindingPoolHandle fontBindingPool_;
-		Velos::RHI::BindingLayoutHandle gltfMaterialBindingLayout_;
-		Velos::RHI::BindingPoolHandle gltfMaterialBindingPool_;
-		Velos::RHI::ImageHandle defaultBaseColorImage_;
-		Velos::RHI::ImageViewHandle defaultBaseColorView_;
-		Velos::RHI::ImageHandle defaultMetallicRoughnessImage_;
-		Velos::RHI::ImageViewHandle defaultMetallicRoughnessView_;
-		Velos::RHI::SamplerHandle defaultMaterialSampler_;
-		Velos::RHI::BindingSetHandle defaultMaterialBindingSet_;
 		std::array<std::vector<Velos::RHI::BufferHandle>, k_FramesInFlight>
 			textVertexBuffers_;
 
@@ -128,7 +129,31 @@ namespace Iryven {
 
 		Velos::RHI::BindingLayoutHandle lightsBindingLayout_;
 		Velos::RHI::BindingPoolHandle lightsBindingPool_;
-		std::unordered_map<const Material*, std::uint32_t> materialSlots_;
+		struct MaterialSlotKey {
+			const Model* model = nullptr;
+			const Material* material = nullptr;
+			bool operator==(const MaterialSlotKey&) const = default;
+		};
+		struct MaterialSlotKeyHash {
+			std::size_t operator()(const MaterialSlotKey& key) const noexcept {
+				const auto modelHash = std::hash<const Model*>{}(key.model);
+				const auto materialHash = std::hash<const Material*>{}(key.material);
+				return modelHash ^ (materialHash + 0x9e3779b9u +
+					(modelHash << 6u) + (modelHash >> 2u));
+			}
+		};
+		std::unordered_map<MaterialSlotKey, std::uint32_t, MaterialSlotKeyHash>
+			materialSlots_;
+
+		std::unique_ptr<BindlessTextureManager> bindlessTextureManager_;
+		BindlessTextureIndex missingTextureIndex_ = 0;
+		Velos::RHI::ImageHandle missingTextureImage_;
+		Velos::RHI::ImageViewHandle missingTextureView_;
+		Velos::RHI::SamplerHandle missingTextureSampler_;
+		std::uint64_t nextSubmissionSerial_ = 1;
+		std::uint64_t lastSubmittedSerial_ = 0;
+		std::uint64_t completedSubmissionSerial_ = 0;
+		std::array<std::uint64_t, k_FramesInFlight> frameSubmissionSerials_{};
 
 		bool swapchainDirty_ = false;
 		bool frameActive_ = false;

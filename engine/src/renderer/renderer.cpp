@@ -72,16 +72,19 @@ std::vector<char32_t> DecodeUtf8(std::string_view text)
 
 namespace Iryven {
 	constexpr std::uint32_t k_MaxMaterials = 1024;
+	constexpr std::uint32_t k_MaxBindlessTextures = 4096;
 
 	struct alignas(16) GpuMaterial {
 		glm::vec4 baseColorFactor{1.0f};
 		glm::vec4 emissiveFactor{0.0f};
 		// x = metallic, y = roughness, z = normal scale, w = occlusion strength.
 		glm::vec4 metallicRoughnessNormal{0.0f, 1.0f, 1.0f, 1.0f};
-		// Reserved for alpha mode, double-sided state, and texture indices.
-		glm::uvec4 flagsAndTextures{0u};
+		// x=base color, y=metallic-roughness, z=normal, w=occlusion.
+		glm::uvec4 textureIndices0{0u};
+		// x=emissive, y=texture-presence flags.
+		glm::uvec4 textureIndices1{0u};
 	};
-	static_assert(sizeof(GpuMaterial) == 64);
+	static_assert(sizeof(GpuMaterial) == 80);
 
 	Renderer::Renderer(Window& window) : window_(window)
 	{
@@ -118,6 +121,7 @@ namespace Iryven {
 			static_cast<std::uint32_t>(width),
 			static_cast<std::uint32_t>(height));
 		CreateBufferResources();
+		CreateBindlessResources();
 		CreatePipelineResources();
 	}
 
@@ -128,9 +132,10 @@ namespace Iryven {
 		}
 
 		device_->WaitIdle();
+		DestroyPipelineResources();
+		DestroyBindlessResources();
 		DestroyMeshResources();
 		DestroyFontResources();
-		DestroyPipelineResources();
 		DestroyBufferResources();
 		DestroyDepthResources();
 
@@ -165,9 +170,6 @@ namespace Iryven {
 
 	bool Renderer::BeginFrame()
 	{
-		CollectUnusedMeshes();
-		CollectUnusedFonts();
-
 		const int width = window_.GetFramebufferWidth();
 		const int height = window_.GetFramebufferHeight();
 
@@ -194,6 +196,14 @@ namespace Iryven {
 			swapchainDirty_ = true;
 			return false;
 		}
+
+		completedSubmissionSerial_ = std::max(
+			completedSubmissionSerial_,
+			frameSubmissionSerials_.at(frame_.frameIndex));
+		bindlessTextureManager_->CollectGarbage(completedSubmissionSerial_);
+		CollectRetiredModels(completedSubmissionSerial_);
+		CollectUnusedMeshes();
+		CollectUnusedFonts();
 
 		auto& retiredTextBuffers = textVertexBuffers_.at(frame_.frameIndex);
 		for (const auto buffer : retiredTextBuffers) {
@@ -287,8 +297,12 @@ namespace Iryven {
 			glm::uvec3 padding{0u};
 		};
 		static_assert(sizeof(DrawConstants) == 80);
+		const MaterialSlotKey materialKey{
+			.model = object.model.get(),
+			.material = object.material.get()
+		};
 		const auto materialSlot = object.material
-			? materialSlots_.find(object.material.get()) : materialSlots_.end();
+			? materialSlots_.find(materialKey) : materialSlots_.end();
 		const DrawConstants drawConstants{
 			.model = object.transform,
 			.materialIndex = materialSlot == materialSlots_.end() ? 0u : materialSlot->second
@@ -299,14 +313,8 @@ namespace Iryven {
 		commands.SetBindings(
 			gltfPipeline_, 0,
 			lightingFrames_.at(frame_.frameIndex).lightBindingSet);
-		Velos::RHI::BindingSetHandle materialBindingSet = defaultMaterialBindingSet_;
-		if (model && object.material) {
-			if (const auto found = model->materialBindingSets.find(object.material.get());
-				found != model->materialBindingSets.end()) {
-				materialBindingSet = found->second;
-			}
-		}
-		commands.SetBindings(gltfPipeline_, 1, materialBindingSet);
+		commands.SetBindings(
+			gltfPipeline_, 1, bindlessTextureManager_->BindingSet());
 		commands.PushConstants(
 			Velos::RHI::ShaderStage::Vertex | Velos::RHI::ShaderStage::Fragment,
 			0,
@@ -472,11 +480,33 @@ namespace Iryven {
 		materials.emplace_back(); // Slot 0 is the default white material.
 
 		for (const RenderObject& object : objects) {
-			if (!object.material || materialSlots_.contains(object.material.get())) continue;
+			if (!object.material) continue;
+			const MaterialSlotKey key{
+				.model = object.model.get(),
+				.material = object.material.get()
+			};
+			if (materialSlots_.contains(key)) continue;
 			if (materials.size() >= k_MaxMaterials)
 				throw std::runtime_error("Renderer material table exceeded its 1024 material capacity");
+
+			GpuModel* gpuModel = object.model
+				? ResolveOrCreateModel(object.model) : nullptr;
+			const auto resolveTextureIndex = [&](std::uint32_t localIndex) {
+				if (!gpuModel || localIndex == InvalidTextureIndex ||
+					localIndex >= gpuModel->bindlessTextureIndices.size()) {
+					return missingTextureIndex_;
+				}
+				return gpuModel->bindlessTextureIndices[localIndex];
+			};
+
 			const std::uint32_t slot = static_cast<std::uint32_t>(materials.size());
-			materialSlots_.emplace(object.material.get(), slot);
+			materialSlots_.emplace(key, slot);
+			std::uint32_t textureFlags = 0;
+			if (object.material->baseColorTexture != InvalidTextureIndex) textureFlags |= 1u;
+			if (object.material->metallicRoughnessTexture != InvalidTextureIndex) textureFlags |= 2u;
+			if (object.material->normalTexture != InvalidTextureIndex) textureFlags |= 4u;
+			if (object.material->occlusionTexture != InvalidTextureIndex) textureFlags |= 8u;
+			if (object.material->emissiveTexture != InvalidTextureIndex) textureFlags |= 16u;
 			materials.push_back(GpuMaterial{
 				.baseColorFactor = object.material->baseColor.Vector(),
 				.emissiveFactor = object.material->emissive.Vector(),
@@ -485,13 +515,14 @@ namespace Iryven {
 					object.material->roughness,
 					object.material->normalScale,
 					object.material->occlusionStrength),
-				.flagsAndTextures = glm::uvec4(
-					object.material->baseColorTexture != InvalidTextureIndex ? 1u : 0u,
-					object.material->metallicRoughnessTexture != InvalidTextureIndex ? 1u : 0u,
-					(object.material->normalTexture != InvalidTextureIndex ? 1u : 0u) |
-					(object.material->occlusionTexture != InvalidTextureIndex ? 2u : 0u) |
-					(object.material->emissiveTexture != InvalidTextureIndex ? 4u : 0u),
-					0u),
+				.textureIndices0 = glm::uvec4(
+					resolveTextureIndex(object.material->baseColorTexture),
+					resolveTextureIndex(object.material->metallicRoughnessTexture),
+					resolveTextureIndex(object.material->normalTexture),
+					resolveTextureIndex(object.material->occlusionTexture)),
+				.textureIndices1 = glm::uvec4(
+					resolveTextureIndex(object.material->emissiveTexture),
+					textureFlags, 0u, 0u),
 			});
 		}
 
@@ -550,28 +581,30 @@ namespace Iryven {
 		commands.End();
 
 		device_->SubmitAndPresent(swapchain_);
+		lastSubmittedSerial_ = nextSubmissionSerial_++;
+		frameSubmissionSerials_.at(frame_.frameIndex) = lastSubmittedSerial_;
 		frameActive_ = false;
 	}
 
 	void Renderer::CreatePipelineResources()
 	{
 		const auto gltfVertexShader = Velos::ShaderCompiler::CompileFile({
-			.path = "assets/shaders/internal/gltf.hlsl",
+			.path = "assets/shaders/internal/gltf.vert",
 			.stage = Velos::RHI::ShaderStage::Vertex,
-			.entryPoint = "VSMain",
-			.language = Velos::ShaderSourceLanguage::HLSL,
+			.entryPoint = "main",
+			.language = Velos::ShaderSourceLanguage::GLSL,
 		});
 		const auto gltfFragmentShader = Velos::ShaderCompiler::CompileFile({
-			.path = "assets/shaders/internal/gltf.hlsl",
+			.path = "assets/shaders/internal/gltf_bindless.frag",
 			.stage = Velos::RHI::ShaderStage::Fragment,
-			.entryPoint = "PSMain",
-			.language = Velos::ShaderSourceLanguage::HLSL,
+			.entryPoint = "main",
+			.language = Velos::ShaderSourceLanguage::GLSL,
 		});
 		gltfVertexShader_ = device_->CreateShader({
 			.stage = Velos::RHI::ShaderStage::Vertex,
 			.bytecode = gltfVertexShader.spirv.data(),
 			.bytecodeSize = static_cast<Velos::u64>(gltfVertexShader.spirv.size() * sizeof(std::uint32_t)),
-			.entryPoint = "VSMain",
+			.entryPoint = "main",
 			.reflection = gltfVertexShader.reflection,
 			.debugName = "Iryven glTF vertex shader",
 		});
@@ -579,7 +612,7 @@ namespace Iryven {
 			.stage = Velos::RHI::ShaderStage::Fragment,
 			.bytecode = gltfFragmentShader.spirv.data(),
 			.bytecodeSize = static_cast<Velos::u64>(gltfFragmentShader.spirv.size() * sizeof(std::uint32_t)),
-			.entryPoint = "PSMain",
+			.entryPoint = "main",
 			.reflection = gltfFragmentShader.reflection,
 			.debugName = "Iryven glTF fragment shader",
 		});
@@ -597,7 +630,7 @@ namespace Iryven {
 		};
 		const Velos::RHI::BindingLayoutHandle gltfBindingLayouts[]{
 			lightsBindingLayout_,
-			gltfMaterialBindingLayout_
+			bindlessTextureManager_->Layout()
 		};
 		gltfPipeline_ = device_->CreateGraphicsPipeline({
 			.vertexShader = gltfVertexShader_,
@@ -623,22 +656,22 @@ namespace Iryven {
 		});
 
 		const auto textVertexShader = Velos::ShaderCompiler::CompileFile({
-			.path = "assets/shaders/internal/ui_text.hlsl",
+			.path = "assets/shaders/internal/ui_text.vert",
 			.stage = Velos::RHI::ShaderStage::Vertex,
-			.entryPoint = "VSMain",
-			.language = Velos::ShaderSourceLanguage::HLSL,
+			.entryPoint = "main",
+			.language = Velos::ShaderSourceLanguage::GLSL,
 		});
 		const auto textFragmentShader = Velos::ShaderCompiler::CompileFile({
-			.path = "assets/shaders/internal/ui_text.hlsl",
+			.path = "assets/shaders/internal/ui_text.frag",
 			.stage = Velos::RHI::ShaderStage::Fragment,
-			.entryPoint = "PSMain",
-			.language = Velos::ShaderSourceLanguage::HLSL,
+			.entryPoint = "main",
+			.language = Velos::ShaderSourceLanguage::GLSL,
 		});
 		textVertexShader_ = device_->CreateShader({
 			.stage = Velos::RHI::ShaderStage::Vertex,
 			.bytecode = textVertexShader.spirv.data(),
 			.bytecodeSize = static_cast<Velos::u64>(textVertexShader.spirv.size() * sizeof(std::uint32_t)),
-			.entryPoint = "VSMain",
+			.entryPoint = "main",
 			.reflection = textVertexShader.reflection,
 			.debugName = "Iryven text vertex shader",
 		});
@@ -646,7 +679,7 @@ namespace Iryven {
 			.stage = Velos::RHI::ShaderStage::Fragment,
 			.bytecode = textFragmentShader.spirv.data(),
 			.bytecodeSize = static_cast<Velos::u64>(textFragmentShader.spirv.size() * sizeof(std::uint32_t)),
-			.entryPoint = "PSMain",
+			.entryPoint = "main",
 			.reflection = textFragmentShader.reflection,
 			.debugName = "Iryven text fragment shader",
 		});
@@ -1001,67 +1034,21 @@ namespace Iryven {
 				}));
 			}
 
-			for (const MaterialHandle& material : model->materials) {
-				const auto bindingSet = device_->AllocateBindingSet({
-					.pool = gltfMaterialBindingPool_,
-					.layout = gltfMaterialBindingLayout_,
-					.debugName = "Iryven glTF material binding set"
-				});
-				const auto textureInfo = [&](std::uint32_t textureIndex, bool baseColor) {
-					if (textureIndex == InvalidTextureIndex) {
-						return Velos::RHI::BindingImageInfo{
-							.sampler = defaultMaterialSampler_,
-							.imageView = baseColor ? defaultBaseColorView_ : defaultMetallicRoughnessView_,
-							.imageLayout = Velos::RHI::ImageLayout::ShaderReadOnly
-						};
-					}
-					const RegisteredTexture& registered = model->textureRegistry.textures[textureIndex];
-					return Velos::RHI::BindingImageInfo{
-						.sampler = gpuModel.samplers[registered.samplerIndex],
-						.imageView = gpuModel.textureViews[textureIndex],
-						.imageLayout = Velos::RHI::ImageLayout::ShaderReadOnly
-					};
-				};
-				const auto baseColorInfo = textureInfo(material->baseColorTexture, true);
-				const auto metallicRoughnessInfo = textureInfo(
-					material->metallicRoughnessTexture, false);
-				const auto normalInfo = textureInfo(material->normalTexture, false);
-				const auto occlusionInfo = textureInfo(material->occlusionTexture, false);
-				const auto emissiveInfo = textureInfo(material->emissiveTexture, true);
-				device_->UpdateBindingSet({
-					.dstSet = bindingSet,
-					.binding = 0,
-					.type = Velos::RHI::BindingType::CombinedImageSampler,
-					.imageInfo = &baseColorInfo
-				});
-				device_->UpdateBindingSet({
-					.dstSet = bindingSet,
-					.binding = 1,
-					.type = Velos::RHI::BindingType::CombinedImageSampler,
-					.imageInfo = &metallicRoughnessInfo
-				});
-				device_->UpdateBindingSet({
-					.dstSet = bindingSet,
-					.binding = 2,
-					.type = Velos::RHI::BindingType::CombinedImageSampler,
-					.imageInfo = &normalInfo
-				});
-				device_->UpdateBindingSet({
-					.dstSet = bindingSet,
-					.binding = 3,
-					.type = Velos::RHI::BindingType::CombinedImageSampler,
-					.imageInfo = &occlusionInfo
-				});
-				device_->UpdateBindingSet({
-					.dstSet = bindingSet,
-					.binding = 4,
-					.type = Velos::RHI::BindingType::CombinedImageSampler,
-					.imageInfo = &emissiveInfo
-				});
-				gpuModel.materialBindingSets.emplace(material.get(), bindingSet);
+			gpuModel.bindlessTextureIndices.reserve(gpuModel.textureViews.size());
+			for (std::size_t index = 0; index < gpuModel.textureViews.size(); ++index) {
+				const RegisteredTexture& registered =
+					model->textureRegistry.textures[index];
+				gpuModel.bindlessTextureIndices.push_back(
+					bindlessTextureManager_->Register(
+						gpuModel.textureViews[index],
+						gpuModel.samplers[registered.samplerIndex]));
 			}
 		}
 		catch (...) {
+			for (const auto index : gpuModel.bindlessTextureIndices) {
+				bindlessTextureManager_->Release(index, completedSubmissionSerial_);
+			}
+			bindlessTextureManager_->CollectGarbage(completedSubmissionSerial_);
 			for (const auto view : gpuModel.textureViews) device_->DestroyImageView(view);
 			for (const auto image : gpuModel.textureImages) device_->DestroyImage(image);
 			for (const auto sampler : gpuModel.samplers) device_->DestroySampler(sampler);
@@ -1087,13 +1074,37 @@ namespace Iryven {
 		}
 		for (auto it = models_.begin(); it != models_.end();) {
 			if (!it->second.source.expired()) { ++it; continue; }
-			for (const auto sampler : it->second.samplers) device_->DestroySampler(sampler);
-			for (const auto view : it->second.textureViews) device_->DestroyImageView(view);
-			for (const auto image : it->second.textureImages) device_->DestroyImage(image);
-			device_->DestroyBuffer(it->second.indexBuffer);
-			device_->DestroyBuffer(it->second.vertexBuffer);
+			for (const auto index : it->second.bindlessTextureIndices) {
+				bindlessTextureManager_->Release(index, lastSubmittedSerial_);
+			}
+			retiredModels_.push_back({
+				.resources = std::move(it->second),
+				.retirementSubmission = lastSubmittedSerial_
+			});
 			it = models_.erase(it);
 		}
+	}
+
+	void Renderer::CollectRetiredModels(std::uint64_t completedSubmission)
+	{
+		auto it = retiredModels_.begin();
+		while (it != retiredModels_.end()) {
+			if (it->retirementSubmission > completedSubmission) {
+				++it;
+				continue;
+			}
+			DestroyGpuModel(it->resources);
+			it = retiredModels_.erase(it);
+		}
+	}
+
+	void Renderer::DestroyGpuModel(GpuModel& model)
+	{
+		for (const auto sampler : model.samplers) device_->DestroySampler(sampler);
+		for (const auto view : model.textureViews) device_->DestroyImageView(view);
+		for (const auto image : model.textureImages) device_->DestroyImage(image);
+		device_->DestroyBuffer(model.indexBuffer);
+		device_->DestroyBuffer(model.vertexBuffer);
 	}
 
 	void Renderer::CollectUnusedFonts()
@@ -1133,150 +1144,6 @@ namespace Iryven {
 			.poolSizeCount = 1,
 			.maxSets = 256,
 			.debugName = "Iryven font binding pool"
-		});
-
-		const Velos::RHI::BindingDesc materialBindings[]{
-			{
-				.binding = 0,
-				.type = Velos::RHI::BindingType::CombinedImageSampler,
-				.count = 1,
-				.visibility = Velos::RHI::ShaderStage::Fragment
-			},
-			{
-				.binding = 1,
-				.type = Velos::RHI::BindingType::CombinedImageSampler,
-				.count = 1,
-				.visibility = Velos::RHI::ShaderStage::Fragment
-			},
-			{
-				.binding = 2,
-				.type = Velos::RHI::BindingType::CombinedImageSampler,
-				.count = 1,
-				.visibility = Velos::RHI::ShaderStage::Fragment
-			},
-			{
-				.binding = 3,
-				.type = Velos::RHI::BindingType::CombinedImageSampler,
-				.count = 1,
-				.visibility = Velos::RHI::ShaderStage::Fragment
-			},
-			{
-				.binding = 4,
-				.type = Velos::RHI::BindingType::CombinedImageSampler,
-				.count = 1,
-				.visibility = Velos::RHI::ShaderStage::Fragment
-			}
-		};
-		gltfMaterialBindingLayout_ = device_->CreateBindingLayout({
-			.bindings = materialBindings,
-			.bindingCount = 5,
-			.debugName = "Iryven glTF material binding layout"
-		});
-		const Velos::RHI::BindingPoolSize materialPoolSize{
-			.type = Velos::RHI::BindingType::CombinedImageSampler,
-			.count = 10240
-		};
-		gltfMaterialBindingPool_ = device_->CreateBindingPool({
-			.poolSizes = &materialPoolSize,
-			.poolSizeCount = 1,
-			.maxSets = 2048,
-			.debugName = "Iryven glTF material binding pool"
-		});
-
-		constexpr std::array<std::uint8_t, 4> whitePixel{255, 255, 255, 255};
-		defaultBaseColorImage_ = device_->CreateImage({
-			.width = 1,
-			.height = 1,
-			.format = Velos::RHI::Format::RGBA8_SRGB,
-			.usage = Velos::RHI::ImageUsage::TransferDst | Velos::RHI::ImageUsage::Sampled,
-			.debugName = "Iryven default base color image"
-		});
-		defaultMetallicRoughnessImage_ = device_->CreateImage({
-			.width = 1,
-			.height = 1,
-			.format = Velos::RHI::Format::RGBA8_UNORM,
-			.usage = Velos::RHI::ImageUsage::TransferDst | Velos::RHI::ImageUsage::Sampled,
-			.debugName = "Iryven default metallic roughness image"
-		});
-		{
-			auto upload = device_->CreateUploadContext(20);
-			upload->Begin();
-			upload->UploadImage({
-				.dstImage = defaultBaseColorImage_,
-				.finalLayout = Velos::RHI::ImageLayout::ShaderReadOnly,
-				.width = 1,
-				.height = 1
-			}, whitePixel.data(), whitePixel.size());
-			upload->UploadImage({
-				.dstImage = defaultMetallicRoughnessImage_,
-				.finalLayout = Velos::RHI::ImageLayout::ShaderReadOnly,
-				.width = 1,
-				.height = 1
-			}, whitePixel.data(), whitePixel.size());
-			upload->Flush();
-		}
-		defaultBaseColorView_ = device_->CreateImageView({
-			.image = defaultBaseColorImage_,
-			.format = Velos::RHI::Format::RGBA8_SRGB,
-			.debugName = "Iryven default base color view"
-		});
-		defaultMetallicRoughnessView_ = device_->CreateImageView({
-			.image = defaultMetallicRoughnessImage_,
-			.format = Velos::RHI::Format::RGBA8_UNORM,
-			.debugName = "Iryven default metallic roughness view"
-		});
-		defaultMaterialSampler_ = device_->CreateSampler({
-			.minFilter = Velos::RHI::Filter::Linear,
-			.magFilter = Velos::RHI::Filter::Linear,
-			.addressU = Velos::RHI::SamplerAddressMode::Repeat,
-			.addressV = Velos::RHI::SamplerAddressMode::Repeat,
-			.addressW = Velos::RHI::SamplerAddressMode::Repeat,
-			.debugName = "Iryven default material sampler"
-		});
-		defaultMaterialBindingSet_ = device_->AllocateBindingSet({
-			.pool = gltfMaterialBindingPool_,
-			.layout = gltfMaterialBindingLayout_,
-			.debugName = "Iryven default material binding set"
-		});
-		const Velos::RHI::BindingImageInfo defaultBaseColorInfo{
-			.sampler = defaultMaterialSampler_,
-			.imageView = defaultBaseColorView_,
-			.imageLayout = Velos::RHI::ImageLayout::ShaderReadOnly
-		};
-		const Velos::RHI::BindingImageInfo defaultMetallicRoughnessInfo{
-			.sampler = defaultMaterialSampler_,
-			.imageView = defaultMetallicRoughnessView_,
-			.imageLayout = Velos::RHI::ImageLayout::ShaderReadOnly
-		};
-		device_->UpdateBindingSet({
-			.dstSet = defaultMaterialBindingSet_,
-			.binding = 0,
-			.type = Velos::RHI::BindingType::CombinedImageSampler,
-			.imageInfo = &defaultBaseColorInfo
-		});
-		device_->UpdateBindingSet({
-			.dstSet = defaultMaterialBindingSet_,
-			.binding = 1,
-			.type = Velos::RHI::BindingType::CombinedImageSampler,
-			.imageInfo = &defaultMetallicRoughnessInfo
-		});
-		device_->UpdateBindingSet({
-			.dstSet = defaultMaterialBindingSet_,
-			.binding = 2,
-			.type = Velos::RHI::BindingType::CombinedImageSampler,
-			.imageInfo = &defaultMetallicRoughnessInfo
-		});
-		device_->UpdateBindingSet({
-			.dstSet = defaultMaterialBindingSet_,
-			.binding = 3,
-			.type = Velos::RHI::BindingType::CombinedImageSampler,
-			.imageInfo = &defaultMetallicRoughnessInfo
-		});
-		device_->UpdateBindingSet({
-			.dstSet = defaultMaterialBindingSet_,
-			.binding = 4,
-			.type = Velos::RHI::BindingType::CombinedImageSampler,
-			.imageInfo = &defaultBaseColorInfo
 		});
 
 		constexpr std::uint64_t gpuLightSize = sizeof(glm::vec4) * 4;
@@ -1400,35 +1267,6 @@ namespace Iryven {
 			device_->DestroyBindingLayout(fontBindingLayout_);
 			fontBindingLayout_ = {};
 		}
-		defaultMaterialBindingSet_ = {};
-		if (gltfMaterialBindingPool_) {
-			device_->DestroyBindingPool(gltfMaterialBindingPool_);
-			gltfMaterialBindingPool_ = {};
-		}
-		if (defaultMaterialSampler_) {
-			device_->DestroySampler(defaultMaterialSampler_);
-			defaultMaterialSampler_ = {};
-		}
-		if (defaultMetallicRoughnessView_) {
-			device_->DestroyImageView(defaultMetallicRoughnessView_);
-			defaultMetallicRoughnessView_ = {};
-		}
-		if (defaultBaseColorView_) {
-			device_->DestroyImageView(defaultBaseColorView_);
-			defaultBaseColorView_ = {};
-		}
-		if (defaultMetallicRoughnessImage_) {
-			device_->DestroyImage(defaultMetallicRoughnessImage_);
-			defaultMetallicRoughnessImage_ = {};
-		}
-		if (defaultBaseColorImage_) {
-			device_->DestroyImage(defaultBaseColorImage_);
-			defaultBaseColorImage_ = {};
-		}
-		if (gltfMaterialBindingLayout_) {
-			device_->DestroyBindingLayout(gltfMaterialBindingLayout_);
-			gltfMaterialBindingLayout_ = {};
-		}
 		if (lightsBindingPool_.IsValid()) {
 			device_->DestroyBindingPool(lightsBindingPool_);
 			lightsBindingPool_ = {};
@@ -1461,14 +1299,12 @@ namespace Iryven {
 			device_->DestroyBuffer(mesh.vertexBuffer);
 		}
 		meshes_.clear();
-		for (const auto& [source, model] : models_) {
-			for (const auto sampler : model.samplers) device_->DestroySampler(sampler);
-			for (const auto view : model.textureViews) device_->DestroyImageView(view);
-			for (const auto image : model.textureImages) device_->DestroyImage(image);
-			device_->DestroyBuffer(model.indexBuffer);
-			device_->DestroyBuffer(model.vertexBuffer);
+		for (auto& [source, model] : models_) {
+			DestroyGpuModel(model);
 		}
 		models_.clear();
+		for (auto& retired : retiredModels_) DestroyGpuModel(retired.resources);
+		retiredModels_.clear();
 	}
 
 	void Renderer::DestroyFontResources()
@@ -1479,6 +1315,76 @@ namespace Iryven {
 			device_->DestroyImage(font.atlasImage);
 		}
 		fonts_.clear();
+	}
+
+	void Renderer::CreateBindlessResources()
+	{
+		bindlessTextureManager_ = std::make_unique<BindlessTextureManager>(
+			*device_, k_MaxBindlessTextures);
+
+		// Magenta-Black checkerboard texture for missing textures
+		missingTextureImage_ = device_->CreateImage({
+			.width = 2,
+			.height = 2,
+			.format = Velos::RHI::Format::RGBA8_SRGB,
+			.usage = Velos::RHI::ImageUsage::TransferDst | Velos::RHI::ImageUsage::Sampled,
+			.debugName = "Iryven missing texture image"
+			});
+
+		{
+			auto upload = device_->CreateUploadContext(16);
+			upload->Begin();
+			upload->UploadImage({
+				.dstImage = missingTextureImage_,
+				.finalLayout = Velos::RHI::ImageLayout::ShaderReadOnly,
+				.width = 2,
+				.height = 2
+				}, std::array<std::uint8_t, 16>{
+					255, 0, 255, 255, 0, 0, 0, 255,
+					0, 0, 0, 255, 255, 0, 255, 255
+				}.data(), 16);
+			upload->Flush();
+		}
+
+		missingTextureView_ = device_->CreateImageView({
+			.image = missingTextureImage_,
+			.format = Velos::RHI::Format::RGBA8_SRGB,
+			.aspect = Velos::RHI::ImageAspect::Color,
+			.debugName = "Iryven missing texture view"
+			});
+
+		missingTextureSampler_ = device_->CreateSampler({
+			.minFilter = Velos::RHI::Filter::Linear,
+			.magFilter = Velos::RHI::Filter::Linear,
+			.addressU = Velos::RHI::SamplerAddressMode::Repeat,
+			.addressV = Velos::RHI::SamplerAddressMode::Repeat,
+			.addressW = Velos::RHI::SamplerAddressMode::Repeat,
+			.debugName = "Iryven missing texture sampler"
+			});
+
+
+		missingTextureIndex_ = bindlessTextureManager_->Register(
+			missingTextureView_, missingTextureSampler_);
+		if (missingTextureIndex_ != 0) {
+			throw std::logic_error("Missing texture must occupy bindless slot 0");
+		}
+	}
+
+	void Renderer::DestroyBindlessResources()
+	{
+		bindlessTextureManager_.reset();
+		if (missingTextureSampler_) {
+			device_->DestroySampler(missingTextureSampler_);
+			missingTextureSampler_ = {};
+		}
+		if (missingTextureView_) {
+			device_->DestroyImageView(missingTextureView_);
+			missingTextureView_ = {};
+		}
+		if (missingTextureImage_) {
+			device_->DestroyImage(missingTextureImage_);
+			missingTextureImage_ = {};
+		}
 	}
 
 }

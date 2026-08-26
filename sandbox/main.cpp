@@ -80,6 +80,7 @@ int main()
 	const auto cubeMesh = Iryven::PrimitiveMeshes::Cube();
 	const auto sphereMesh = Iryven::PrimitiveMeshes::Sphere();
 	const auto duckModel = engine.GetAssets().LoadModel("assets/models/Duck.glb");
+	const auto damagedHelmetModel = engine.GetAssets().LoadModel("assets/models/DamagedHelmet.glb");
 	const auto groundMaterial = MakeMaterial("Ground", { 0.08f, 0.12f, 0.18f }, 0.5, 0.0);
 	const auto playerMaterial = MakeMaterial("Player", Iryven::Color::CornflowerBlue);
 	const auto winMaterial = MakeMaterial("Win", Iryven::Color::Green);
@@ -99,6 +100,13 @@ int main()
 		.scale = { 0.8f, 1.0f, 0.8f },
 		});
 	player.Add<Iryven::MeshRenderer>(cubeMesh, playerMaterial);
+
+	auto damagedHelmet = world.CreateEntity("Damaged Helmet");
+	damagedHelmet.Add<Iryven::Transform>(Iryven::Transform{
+		.position = { 0.0f, 0.5f, -3.0f },
+		.scale = glm::vec3{ 3.5f },
+		});
+	damagedHelmet.Add<Iryven::MeshRenderer>(damagedHelmetModel);
 
 	constexpr std::array<glm::vec3, 5> collectiblePositions{
 		glm::vec3{ -5.5f, 0.65f, -4.0f },
