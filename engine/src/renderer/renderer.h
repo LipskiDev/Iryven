@@ -110,9 +110,11 @@ namespace Iryven {
 		Velos::RHI::ShaderHandle gltfVertexShader_;
 		Velos::RHI::ShaderHandle gltfFragmentShader_;
 		Velos::RHI::PipelineHandle gltfPipeline_;
+		Velos::RHI::GeneratedPipelineLayout gltfGeneratedLayout_;
 		Velos::RHI::ShaderHandle textVertexShader_;
 		Velos::RHI::ShaderHandle textFragmentShader_;
 		Velos::RHI::PipelineHandle textPipeline_;
+		Velos::RHI::GeneratedPipelineLayout textGeneratedLayout_;
 		Velos::RHI::BindingLayoutHandle fontBindingLayout_;
 		Velos::RHI::BindingPoolHandle fontBindingPool_;
 		std::array<std::vector<Velos::RHI::BufferHandle>, k_FramesInFlight>

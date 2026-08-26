@@ -120,9 +120,9 @@ namespace Iryven {
 		CreateDepthResources(
 			static_cast<std::uint32_t>(width),
 			static_cast<std::uint32_t>(height));
-		CreateBufferResources();
 		CreateBindlessResources();
 		CreatePipelineResources();
+		CreateBufferResources();
 	}
 
 	Renderer::~Renderer()
@@ -628,17 +628,33 @@ namespace Iryven {
 				{.location = 4, .binding = 0, .format = Velos::RHI::VertexFormat::Float32x4, .offset = offsetof(Vertex, color)},
 			}
 		};
-		const Velos::RHI::BindingLayoutHandle gltfBindingLayouts[]{
-			lightsBindingLayout_,
-			bindlessTextureManager_->Layout()
+		const std::array gltfReflections{
+			gltfVertexShader.reflection,
+			gltfFragmentShader.reflection,
 		};
+		const auto gltfReflection =
+			Velos::ShaderCompiler::MergeShaderReflection(gltfReflections);
+		const Velos::PipelineLayoutOverrides gltfLayoutOverrides{
+			.existingSetLayouts = {
+				{1, bindlessTextureManager_->Layout()},
+			},
+		};
+		gltfGeneratedLayout_ = device_->BuildPipelineLayout(
+			gltfReflection, gltfLayoutOverrides);
+		if (gltfGeneratedLayout_.setLayouts.size() != 2) {
+			throw std::runtime_error(
+				"Reflected glTF pipeline must contain descriptor sets 0 and 1");
+		}
+		lightsBindingLayout_ = gltfGeneratedLayout_.setLayouts[0];
+
 		gltfPipeline_ = device_->CreateGraphicsPipeline({
 			.vertexShader = gltfVertexShader_,
 			.fragmentShader = gltfFragmentShader_,
 			.vertexLayouts = { gltfVertexLayout },
 			.layout = {
-				.descriptorSetLayouts = gltfBindingLayouts,
-				.descriptorSetLayoutCount = 2
+				.descriptorSetLayouts = gltfGeneratedLayout_.setLayouts.data(),
+				.descriptorSetLayoutCount = static_cast<Velos::u32>(
+					gltfGeneratedLayout_.setLayouts.size())
 			},
 			.topology = Velos::RHI::PrimitiveTopology::TriangleList,
 			.raster = {
@@ -693,13 +709,27 @@ namespace Iryven {
 				{.location = 2, .binding = 0, .format = Velos::RHI::VertexFormat::Float32x4, .offset = offsetof(TextVertex, color)}
 			}
 		};
+		const std::array textReflections{
+			textVertexShader.reflection,
+			textFragmentShader.reflection,
+		};
+		const auto textReflection =
+			Velos::ShaderCompiler::MergeShaderReflection(textReflections);
+		textGeneratedLayout_ = device_->BuildPipelineLayout(textReflection);
+		if (textGeneratedLayout_.setLayouts.size() != 1) {
+			throw std::runtime_error(
+				"Reflected text pipeline must contain descriptor set 0");
+		}
+		fontBindingLayout_ = textGeneratedLayout_.setLayouts[0];
+
 		textPipeline_ = device_->CreateGraphicsPipeline({
 			.vertexShader = textVertexShader_,
 			.fragmentShader = textFragmentShader_,
 			.vertexLayouts = {textVertexLayout},
 			.layout = {
-				.descriptorSetLayouts = &fontBindingLayout_,
-				.descriptorSetLayoutCount = 1
+				.descriptorSetLayouts = textGeneratedLayout_.setLayouts.data(),
+				.descriptorSetLayoutCount = static_cast<Velos::u32>(
+					textGeneratedLayout_.setLayouts.size())
 			},
 			.topology = Velos::RHI::PrimitiveTopology::TriangleList,
 			.raster = {.cullBackFaces = false},
@@ -1124,17 +1154,6 @@ namespace Iryven {
 
 	void Renderer::CreateBufferResources()
 	{
-		const Velos::RHI::BindingDesc fontBinding{
-			.binding = 0,
-			.type = Velos::RHI::BindingType::CombinedImageSampler,
-			.count = 1,
-			.visibility = Velos::RHI::ShaderStage::Fragment
-		};
-		fontBindingLayout_ = device_->CreateBindingLayout({
-			.bindings = &fontBinding,
-			.bindingCount = 1,
-			.debugName = "Iryven font binding layout"
-		});
 		const Velos::RHI::BindingPoolSize fontPoolSize{
 			.type = Velos::RHI::BindingType::CombinedImageSampler,
 			.count = 256
@@ -1148,31 +1167,6 @@ namespace Iryven {
 
 		constexpr std::uint64_t gpuLightSize = sizeof(glm::vec4) * 4;
 		constexpr std::uint64_t lightsBufferSize = sizeof(glm::uvec4) + gpuLightSize * k_MaxLightSources;
-		const Velos::RHI::BindingDesc bindings[]{
-			{
-				.binding = 0,
-				.type = Velos::RHI::BindingType::UniformBuffer,
-				.count = 1,
-				.visibility = Velos::RHI::ShaderStage::Fragment
-			},
-			{
-				.binding = 1,
-				.type = Velos::RHI::BindingType::UniformBuffer,
-				.count = 1,
-				.visibility = Velos::RHI::ShaderStage::Vertex | Velos::RHI::ShaderStage::Fragment
-			},
-			{
-				.binding = 2,
-				.type = Velos::RHI::BindingType::StorageBuffer,
-				.count = 1,
-				.visibility = Velos::RHI::ShaderStage::Fragment
-			}
-		};
-		lightsBindingLayout_ = device_->CreateBindingLayout({
-			.bindings = bindings,
-			.bindingCount = 3,
-			.debugName = "Lights Binding Layout"
-		});
 		const Velos::RHI::BindingPoolSize poolSizes[]{
 			{
 				.type = Velos::RHI::BindingType::UniformBuffer,
@@ -1263,10 +1257,6 @@ namespace Iryven {
 			device_->DestroyBindingPool(fontBindingPool_);
 			fontBindingPool_ = {};
 		}
-		if (fontBindingLayout_) {
-			device_->DestroyBindingLayout(fontBindingLayout_);
-			fontBindingLayout_ = {};
-		}
 		if (lightsBindingPool_.IsValid()) {
 			device_->DestroyBindingPool(lightsBindingPool_);
 			lightsBindingPool_ = {};
@@ -1286,10 +1276,16 @@ namespace Iryven {
 				frame.materialBuffer = {};
 			}
 		}
-		if (lightsBindingLayout_.IsValid()) {
-			device_->DestroyBindingLayout(lightsBindingLayout_);
-			lightsBindingLayout_ = {};
+		fontBindingLayout_ = {};
+		lightsBindingLayout_ = {};
+		for (const auto layout : textGeneratedLayout_.ownedSetLayouts) {
+			device_->DestroyBindingLayout(layout);
 		}
+		textGeneratedLayout_ = {};
+		for (const auto layout : gltfGeneratedLayout_.ownedSetLayouts) {
+			device_->DestroyBindingLayout(layout);
+		}
+		gltfGeneratedLayout_ = {};
 	}
 
 	void Renderer::DestroyMeshResources()
