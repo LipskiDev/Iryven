@@ -16,6 +16,7 @@
 
 #include <rhi/pipeline.h>
 #include <shader/shader_compiler.h>
+#include <rhi/upload_context.h>
 
 namespace {
 
@@ -908,6 +909,7 @@ namespace Iryven {
 				pixels.size()
 			);
 			upload->Flush();
+			device_->AcquireUploadedImages(upload->TakePendingImageAcquires());
 
 			atlasView = device_->CreateImageView({
 				.image = atlasImage,
@@ -1052,6 +1054,7 @@ namespace Iryven {
 					}, texture.pixels.data(), texture.pixels.size());
 				}
 				upload->Flush();
+				device_->AcquireUploadedImages(upload->TakePendingImageAcquires());
 			}
 			for (std::size_t index = 0; index < gpuModel.textureImages.size(); ++index) {
 				const Texture& texture = *model->textureRegistry.textures[index].texture;
@@ -1340,6 +1343,7 @@ namespace Iryven {
 					0, 0, 0, 255, 255, 0, 255, 255
 				}.data(), 16);
 			upload->Flush();
+			device_->AcquireUploadedImages(upload->TakePendingImageAcquires());
 		}
 
 		missingTextureView_ = device_->CreateImageView({
