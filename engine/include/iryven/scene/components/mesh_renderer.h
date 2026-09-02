@@ -8,6 +8,7 @@
 #include <iryven/rendering/mesh_data.h>
 #include <iryven/material.h>
 #include <iryven/model.h>
+#include <iryven/assets/asset_handle.h>
 
 namespace Iryven {
 
@@ -23,6 +24,11 @@ struct MeshRenderer {
             throw std::invalid_argument("MeshRenderer requires valid model data");
     }
 
+    explicit MeshRenderer(AssetHandle modelAsset, MaterialHandle material = {})
+        : modelAsset(modelAsset), material(std::move(material)) {
+        if (!modelAsset) throw std::invalid_argument("MeshRenderer requires a valid model asset handle");
+    }
+
     MeshRenderer(std::vector<Vertex> vertices, std::vector<std::uint32_t> indices)
         : mesh(std::make_shared<const MeshData>(MeshData{
             .vertices = std::move(vertices),
@@ -31,6 +37,7 @@ struct MeshRenderer {
 
     std::shared_ptr<const MeshData> mesh;
     ModelHandle model;
+    AssetHandle modelAsset;
     MaterialHandle material;
 };
 

@@ -10,6 +10,8 @@
 #include <iryven/window.h>
 #include <iryven/input/input.h>
 #include <iryven/asset_manager.h>
+#include <iryven/assets/asynchronous_loader.h>
+#include <iryven/renderer/asset_upload_queue.h>
 #include <iryven/layer_stack.h>
 #include <iryven/layers/game_layer.h>
 #include <iryven/layers/ui_layer.h>
@@ -37,6 +39,7 @@ public:
     InputHandler& GetInput();
     [[nodiscard]] AssetManager& GetAssets() noexcept;
     [[nodiscard]] const AssetManager& GetAssets() const noexcept;
+    [[nodiscard]] AsynchronousLoader& GetAsyncLoader() noexcept;
     [[nodiscard]] GameLayer& GetGameLayer() noexcept;
     [[nodiscard]] const GameLayer& GetGameLayer() const noexcept;
     [[nodiscard]] UILayer& GetUILayer() noexcept;
@@ -59,14 +62,17 @@ private:
 private:
     EngineConfig config_;
     std::unique_ptr<Window> window_;
-    std::unique_ptr<Renderer> renderer_;
     bool running_ = true;
     InputHandler input_;
     AssetManager assets_;
+    AssetUploadQueue assetUploads_;
+    std::unique_ptr<AsynchronousLoader> asynchronousLoader_;
+    std::unique_ptr<Renderer> renderer_;
     LayerStack layers_;
     GameLayer* gameLayer_ = nullptr;
     UILayer* uiLayer_ = nullptr;
     DebugLayer* debugLayer_ = nullptr;
+    bool firstFramePresented_ = false;
 };
 
 } // namespace Iryven

@@ -14,6 +14,7 @@
 #include <rhi/device.h>
 #include <iryven/assets/font.h>
 #include "bindless_texture_manager.h"
+#include <iryven/renderer/asset_upload_queue.h>
 
 namespace Iryven {
 
@@ -22,7 +23,7 @@ namespace Iryven {
 
 	class Renderer final : public RenderContext {
 	public:
-		explicit Renderer(Window& window);
+		explicit Renderer(Window& window, AssetUploadQueue& assetUploads);
 		~Renderer();
 
 		Renderer(const Renderer&) = delete;
@@ -57,6 +58,7 @@ namespace Iryven {
 		void DestroyFontResources();
 		void CreateBindlessResources();
 		void DestroyBindlessResources();
+		void ProcessAssetUploads();
 
 		struct GpuMesh {
 			std::weak_ptr<const MeshData> source;
@@ -96,6 +98,7 @@ namespace Iryven {
 
 	private:
 		Window& window_;
+		AssetUploadQueue& assetUploads_;
 
 		std::unique_ptr<Velos::RHI::IDevice> device_;
 		Velos::RHI::SwapchainHandle swapchain_;

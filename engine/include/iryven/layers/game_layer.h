@@ -7,6 +7,8 @@
 
 namespace Iryven {
 
+class AsynchronousLoader;
+
 class GameLayer final : public Layer {
 public:
     GameLayer();
@@ -17,6 +19,7 @@ public:
 
     void OnUpdate(float deltaTime) override;
     void OnRender(RenderContext& context) override;
+    void ResolveAssetReferences(const AsynchronousLoader& loader);
 
 private:
     std::unique_ptr<World> world_;

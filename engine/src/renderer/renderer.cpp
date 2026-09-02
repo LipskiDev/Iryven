@@ -87,7 +87,8 @@ namespace Iryven {
 	};
 	static_assert(sizeof(GpuMaterial) == 80);
 
-	Renderer::Renderer(Window& window) : window_(window)
+	Renderer::Renderer(Window& window, AssetUploadQueue& assetUploads)
+		: window_(window), assetUploads_(assetUploads)
 	{
 		device_.reset(Velos::RHI::CreateDevice({
 			.graphicsAPI = Velos::RHI::GraphicsAPI::Vulkan,
@@ -574,6 +575,8 @@ namespace Iryven {
 			scenePassActive_ = false;
 		}
 
+		ProcessAssetUploads();
+
 		commands.Barrier({
 			.image = frame_.backbufferImage,
 			.newLayout = Velos::RHI::ImageLayout::Present,
@@ -587,19 +590,40 @@ namespace Iryven {
 		frameActive_ = false;
 	}
 
+	void Renderer::ProcessAssetUploads()
+	{
+		for (AssetUploadRequest& request : assetUploads_.Drain()) {
+			try {
+				if (request.model) {
+					if (!ResolveOrCreateModel(request.model)) {
+						throw std::runtime_error("Could not create GPU model resources");
+					}
+				}
+
+				if (request.onComplete) request.onComplete();
+			}
+			catch (const std::exception& exception) {
+				if (request.onFailure) request.onFailure(exception.what());
+			}
+			catch (...) {
+				if (request.onFailure) request.onFailure("Unknown GPU upload failure");
+			}
+		}
+	}
+
 	void Renderer::CreatePipelineResources()
 	{
 		const auto gltfVertexShader = Velos::ShaderCompiler::CompileFile({
-			.path = "assets/shaders/internal/gltf.vert",
+			.path = "assets/shaders/internal/gltf.vert.spv",
 			.stage = Velos::RHI::ShaderStage::Vertex,
 			.entryPoint = "main",
-			.language = Velos::ShaderSourceLanguage::GLSL,
+			.language = Velos::ShaderSourceLanguage::SpirvBinary,
 		});
 		const auto gltfFragmentShader = Velos::ShaderCompiler::CompileFile({
-			.path = "assets/shaders/internal/gltf_bindless.frag",
+			.path = "assets/shaders/internal/gltf_bindless.frag.spv",
 			.stage = Velos::RHI::ShaderStage::Fragment,
 			.entryPoint = "main",
-			.language = Velos::ShaderSourceLanguage::GLSL,
+			.language = Velos::ShaderSourceLanguage::SpirvBinary,
 		});
 		gltfVertexShader_ = device_->CreateShader({
 			.stage = Velos::RHI::ShaderStage::Vertex,
@@ -673,16 +697,16 @@ namespace Iryven {
 		});
 
 		const auto textVertexShader = Velos::ShaderCompiler::CompileFile({
-			.path = "assets/shaders/internal/ui_text.vert",
+			.path = "assets/shaders/internal/ui_text.vert.spv",
 			.stage = Velos::RHI::ShaderStage::Vertex,
 			.entryPoint = "main",
-			.language = Velos::ShaderSourceLanguage::GLSL,
+			.language = Velos::ShaderSourceLanguage::SpirvBinary,
 		});
 		const auto textFragmentShader = Velos::ShaderCompiler::CompileFile({
-			.path = "assets/shaders/internal/ui_text.frag",
+			.path = "assets/shaders/internal/ui_text.frag.spv",
 			.stage = Velos::RHI::ShaderStage::Fragment,
 			.entryPoint = "main",
-			.language = Velos::ShaderSourceLanguage::GLSL,
+			.language = Velos::ShaderSourceLanguage::SpirvBinary,
 		});
 		textVertexShader_ = device_->CreateShader({
 			.stage = Velos::RHI::ShaderStage::Vertex,

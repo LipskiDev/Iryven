@@ -2,6 +2,7 @@
 /bin-int/
 /build/
 /cache/
+/assets/shaders/internal/*.spv
 /.vs/
 /external/LivePP/
 *.sln

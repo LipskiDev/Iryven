@@ -25,6 +25,7 @@ IryvenPublicIncludeDirs = {
     "external/spdlog/include",
     "external/glm",
     "external/flecs/distr",
+    "external/enkiTS/src",
     "external/msdf-atlas-gen",
     "external/msdf-atlas-gen/msdfgen"
 }
@@ -33,12 +34,19 @@ IryvenPublicDefines = {
     "SPDLOG_COMPILED_LIB"
 }
 
+local vulkanSdk = os.getenv("VULKAN_SDK")
+if not vulkanSdk then
+    error("VULKAN_SDK must be set so Premake can locate glslc for shader compilation")
+end
+local glslc = path.join(vulkanSdk, "Bin", "glslc.exe")
+
 include "premake/velos.lua"
 include "premake/spdlog.lua"
 include "premake/flecs.lua"
 include "premake/box3d.lua"
 include "premake/msdf.lua"
 include "premake/fastgltf.lua"
+include "premake/enkits.lua"
 
 project "Iryven"
     location "build/Iryven"
@@ -64,10 +72,21 @@ project "Iryven"
         "engine/src/third_party"
     }
     defines (IryvenPublicDefines)
-    links { "Velos", "spdlog", "Flecs", "Box3D", "MSDFAtlasGen", "fastgltf" }
+    links { "Velos", "spdlog", "Flecs", "Box3D", "MSDFAtlasGen", "fastgltf", "enkiTS" }
 
-    -- Shaders are compiled at runtime by Velos. Prevent Visual Studio from
-    -- sending Vulkan-flavoured HLSL through its legacy FXC build step.
+    -- Compile GLSL to SPIR-V at build time. Runtime shader loading still
+    -- performs reflection, but no longer invokes the GLSL compiler.
+    filter "files:assets/shaders/internal/**.vert"
+        buildmessage "Compiling %{file.name} to SPIR-V"
+        buildcommands { '"' .. glslc .. '" -fshader-stage=vert -o "%{file.abspath}.spv" "%{file.abspath}"' }
+        buildoutputs { "%{file.abspath}.spv" }
+    filter "files:assets/shaders/internal/**.frag"
+        buildmessage "Compiling %{file.name} to SPIR-V"
+        buildcommands { '"' .. glslc .. '" -fshader-stage=frag -o "%{file.abspath}.spv" "%{file.abspath}"' }
+        buildoutputs { "%{file.abspath}.spv" }
+
+    -- Prevent Visual Studio from sending Vulkan-flavoured HLSL through its
+    -- legacy FXC build step.
     filter "files:**.hlsl"
         excludefrombuild "On"
 

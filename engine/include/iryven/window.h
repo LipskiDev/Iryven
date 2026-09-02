@@ -30,6 +30,7 @@ namespace Iryven {
 		using EventCallbackFn = std::function<void(Event&)>;
 		virtual ~Window() = default;
 		virtual void PollEvents() = 0;
+		virtual void Show() = 0;
 		virtual bool ShouldClose() const = 0;
 
 		virtual int GetHeight() const = 0;

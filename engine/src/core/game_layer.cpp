@@ -33,4 +33,9 @@ void GameLayer::OnRender(RenderContext& context)
     context.DrawScene(world_->ExtractRenderScene());
 }
 
+void GameLayer::ResolveAssetReferences(const AsynchronousLoader& loader)
+{
+    world_->ResolveAssetReferences(loader);
+}
+
 } // namespace Iryven

@@ -19,7 +19,8 @@ Engine::Engine(EngineConfig config)
 
     window_ = Iryven::CreateWindow(WindowProperties(config_.title, config_.width, config_.height));
 
-    renderer_ = std::make_unique<Renderer>(*window_);
+    asynchronousLoader_ = std::make_unique<AsynchronousLoader>(assets_, assetUploads_);
+    renderer_ = std::make_unique<Renderer>(*window_, assetUploads_);
 
     window_->SetEventCallback(
         [this](Event& event) {
@@ -106,8 +107,14 @@ void Engine::Render()
         return;
     }
 
+    gameLayer_->ResolveAssetReferences(*asynchronousLoader_);
     layers_.Render(*renderer_);
     renderer_->EndFrame();
+
+    if (!firstFramePresented_) {
+        window_->Show();
+        firstFramePresented_ = true;
+    }
 }
 
 InputHandler& Engine::GetInput()
@@ -123,6 +130,11 @@ AssetManager& Engine::GetAssets() noexcept
 const AssetManager& Engine::GetAssets() const noexcept
 {
     return assets_;
+}
+
+AsynchronousLoader& Engine::GetAsyncLoader() noexcept
+{
+    return *asynchronousLoader_;
 }
 
 GameLayer& Engine::GetGameLayer() noexcept

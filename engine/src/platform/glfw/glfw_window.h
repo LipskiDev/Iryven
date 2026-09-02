@@ -14,6 +14,7 @@ namespace Iryven {
 		~GlfwWindow() override;
 
 		void PollEvents() override;
+		void Show() override;
 		bool ShouldClose() const override;
 
 		int GetWidth() const override;

@@ -14,6 +14,7 @@
 namespace Iryven {
 
 class PhysicsWorld;
+class AsynchronousLoader;
 
 class World {
 public:
@@ -31,6 +32,7 @@ public:
         std::function<void(float, Components&...)> function);
 
     bool Progress(float deltaTime = 0.0f);
+    void ResolveAssetReferences(const AsynchronousLoader& loader);
 
     [[nodiscard]] RenderScene ExtractRenderScene() const;
 private:

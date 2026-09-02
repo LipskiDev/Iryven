@@ -7,6 +7,7 @@
 #include <glm/geometric.hpp>
 
 #include <iryven/scene/components/components.h>
+#include <iryven/assets/asynchronous_loader.h>
 #include "../physics/physics_world.h"
 
 
@@ -25,6 +26,15 @@ namespace Iryven {
 		const bool result = world_.progress(deltaTime);
 		physics_->Update(deltaTime);
 		return result;
+	}
+
+	void World::ResolveAssetReferences(const AsynchronousLoader& loader)
+	{
+		auto renderableQuery = world_.query<MeshRenderer>();
+		renderableQuery.each([&loader](MeshRenderer& meshRenderer) {
+			if (meshRenderer.model || !meshRenderer.modelAsset) return;
+			meshRenderer.model = loader.GetModel(meshRenderer.modelAsset);
+		});
 	}
 
 	RenderScene World::ExtractRenderScene() const

@@ -79,8 +79,8 @@ int main()
 
 	const auto cubeMesh = Iryven::PrimitiveMeshes::Cube();
 	const auto sphereMesh = Iryven::PrimitiveMeshes::Sphere();
-	const auto duckModel = engine.GetAssets().LoadModel("assets/models/Duck.glb");
-	const auto damagedHelmetModel = engine.GetAssets().LoadModel("assets/models/DamagedHelmet.glb");
+	const auto duckModel = engine.GetAsyncLoader().RequestModel("assets/models/Duck.glb");
+	const auto damagedHelmetModel = engine.GetAsyncLoader().RequestModel("assets/models/DamagedHelmet.glb");
 	const auto groundMaterial = MakeMaterial("Ground", { 0.08f, 0.12f, 0.18f }, 0.5, 0.0);
 	const auto playerMaterial = MakeMaterial("Player", Iryven::Color::CornflowerBlue);
 	const auto winMaterial = MakeMaterial("Win", Iryven::Color::Green);

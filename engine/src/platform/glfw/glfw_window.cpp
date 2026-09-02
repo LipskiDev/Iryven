@@ -22,6 +22,7 @@ namespace Iryven {
 
 		glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 		glfwWindowHint(GLFW_RESIZABLE, resizable ? GLFW_TRUE : GLFW_FALSE);
+		glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
 		glfwSetErrorCallback(GLFWErrorCallback);
 
 		window_ = glfwCreateWindow(windowWidth_, windowHeight_, title_.c_str(),
@@ -158,6 +159,11 @@ namespace Iryven {
 	void GlfwWindow::PollEvents()
 	{
 		glfwPollEvents();
+	}
+
+	void GlfwWindow::Show()
+	{
+		glfwShowWindow(window_);
 	}
 
 	bool GlfwWindow::ShouldClose() const
