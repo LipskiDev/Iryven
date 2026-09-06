@@ -1,4 +1,5 @@
 #include <iryven/iryven.h>
+#include <iryven/rendering/framegraph.h>
 
 #include <cassert>
 #include <memory>
@@ -48,6 +49,79 @@ private:
 
 int main()
 {
+	{
+        Iryven::FrameGraphBuilder builder;
+        Iryven::FrameGraph graph;
+        graph.Init(builder);
+
+        const Iryven::FrameGraphTextureInfo textureInfo{
+            .width = 1280,
+            .height = 720,
+            .format = Velos::RHI::Format::RGBA8_UNORM,
+            .usage = Velos::RHI::ImageUsage::ColorAttachment |
+                     Velos::RHI::ImageUsage::Sampled,
+        };
+
+        graph.AddNode({
+            .name = "lighting",
+            .inputs = {{
+                .type = Iryven::FrameGraphResourceType::Texture,
+                .name = "gbuffer",
+            }},
+        });
+        graph.AddNode({
+            .name = "geometry",
+            .outputs = {{
+                .type = Iryven::FrameGraphResourceType::Attachment,
+                .info = textureInfo,
+                .external = true,
+                .name = "gbuffer",
+            }},
+        });
+
+        graph.Compile();
+        const auto order = graph.ExecutionOrder();
+        assert(order.size() == 2);
+        assert(graph.AccessNode(order[0])->name == "geometry");
+        assert(graph.AccessNode(order[1])->name == "lighting");
+
+        const auto* output = graph.GetResource("gbuffer");
+        const auto* lighting = graph.GetNode("lighting");
+        const auto* input = graph.AccessResource(lighting->inputs.front());
+        assert(output != nullptr && output->referenceCount == 1);
+        assert(input != nullptr && input->producer == output->producer);
+        assert(input->outputHandle == output->outputHandle);
+
+        graph.Reset();
+        graph.AddNode({
+            .name = "a",
+            .inputs = {{ .name = "b-out" }},
+            .outputs = {{
+                .info = textureInfo,
+                .external = true,
+                .name = "a-out",
+            }},
+        });
+        graph.AddNode({
+            .name = "b",
+            .inputs = {{ .name = "a-out" }},
+            .outputs = {{
+                .info = textureInfo,
+                .external = true,
+                .name = "b-out",
+            }},
+        });
+
+        bool cycleDetected = false;
+        try {
+            graph.Compile();
+        } catch (const std::logic_error&) {
+            cycleDetected = true;
+        }
+        assert(cycleDetected);
+        graph.Shutdown();
+    }
+
 	const auto bindlessVertexShader = Velos::ShaderCompiler::CompileFile({
 		.path = "assets/shaders/internal/gltf.vert",
 		.stage = Velos::RHI::ShaderStage::Vertex,

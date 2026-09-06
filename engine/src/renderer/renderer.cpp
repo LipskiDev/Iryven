@@ -87,6 +87,45 @@ namespace Iryven {
 	};
 	static_assert(sizeof(GpuMaterial) == 80);
 
+	class Renderer::OpaquePass final : public FrameGraphRenderPass {
+	public:
+		explicit OpaquePass(Renderer& renderer) : renderer_(renderer) {}
+
+		void AddUI() override {}
+
+		void PreRender(
+			Velos::RHI::ICommandList&, const RenderScene& scene) override
+		{
+			renderer_.UploadLights(scene.lights);
+			renderer_.UploadMaterials(scene.objects);
+			hasCamera_ = scene.camera.has_value();
+			if (hasCamera_) {
+				frameData_ = renderer_.BuildFrameData(*scene.camera);
+				renderer_.UploadFrameData(frameData_);
+			}
+		}
+
+		void Render(
+			Velos::RHI::ICommandList&, const RenderScene& scene) override
+		{
+			if (hasCamera_) {
+				for (const RenderObject& object : scene.objects) {
+					renderer_.DrawObject(object, frameData_);
+				}
+			}
+			for (const RenderText& text : scene.texts) {
+				renderer_.DrawText(text);
+			}
+		}
+
+		void OnResize(Velos::RHI::IDevice&, std::uint32_t, std::uint32_t) override {}
+
+	private:
+		Renderer& renderer_;
+		FrameData frameData_{};
+		bool hasCamera_ = false;
+	};
+
 	Renderer::Renderer(Window& window, AssetUploadQueue& assetUploads)
 		: window_(window), assetUploads_(assetUploads)
 	{
@@ -125,6 +164,45 @@ namespace Iryven {
 		CreateBindlessResources();
 		CreatePipelineResources();
 		CreateBufferResources();
+
+		frameGraphBuilder_.Init(*device_);
+		frameGraph_.Init(frameGraphBuilder_);
+		opaquePass_ = std::make_unique<OpaquePass>(*this);
+		frameGraphBuilder_.RegisterRenderPass("opaque", *opaquePass_);
+
+		const Color clearColor = Color::CornflowerBlue;
+		frameGraph_.AddNode({
+			.name = "opaque",
+			.outputs = {
+				{
+					.type = FrameGraphResourceType::Attachment,
+					.info = FrameGraphTextureInfo{
+						.width = static_cast<std::uint32_t>(width),
+						.height = static_cast<std::uint32_t>(height),
+						.format = Velos::RHI::Format::BGRA8_UNORM,
+						.usage = Velos::RHI::ImageUsage::ColorAttachment,
+						.loadOp = RenderPassOperation::Clear,
+						.clearColor = {
+							clearColor.R(), clearColor.G(), clearColor.B(), clearColor.A() },
+					},
+					.external = true,
+					.name = "backbuffer",
+				},
+				{
+					.type = FrameGraphResourceType::Attachment,
+					.info = FrameGraphTextureInfo{
+						.width = static_cast<std::uint32_t>(width),
+						.height = static_cast<std::uint32_t>(height),
+						.format = Velos::RHI::Format::D32_FLOAT,
+						.usage = Velos::RHI::ImageUsage::DepthStencil,
+						.loadOp = RenderPassOperation::Clear,
+					},
+					.external = true,
+					.name = "depth",
+				},
+			},
+		});
+		frameGraph_.Compile();
 	}
 
 	Renderer::~Renderer()
@@ -134,6 +212,9 @@ namespace Iryven {
 		}
 
 		device_->WaitIdle();
+		frameGraph_.Shutdown();
+		frameGraphBuilder_.Shutdown();
+		opaquePass_.reset();
 		DestroyPipelineResources();
 		DestroyBindlessResources();
 		DestroyMeshResources();
@@ -152,22 +233,7 @@ namespace Iryven {
 			throw std::logic_error("Renderer::DrawScene called outside an active frame");
 		}
 
-		BeginScenePass();
-
-		UploadLights(renderScene.lights);
-		UploadMaterials(renderScene.objects);
-
-		if (renderScene.camera) {
-			const FrameData frameData = BuildFrameData(*renderScene.camera);
-			UploadFrameData(frameData);
-			for (const RenderObject& object : renderScene.objects) {
-				DrawObject(object, frameData);
-			}
-		}
-
-		for (const RenderText& text : renderScene.texts) {
-			DrawText(text);
-		}
+		frameGraph_.Render(device_->GetCommandList(), renderScene);
 	}
 
 	bool Renderer::BeginFrame()
@@ -215,78 +281,32 @@ namespace Iryven {
 
 		auto& commands = device_->GetCommandList();
 		commands.Begin();
-		commands.Barrier({
-			.image = frame_.backbufferImage,
-			.newLayout = Velos::RHI::ImageLayout::ColorAttachment,
-			.aspect = Velos::RHI::ImageAspect::Color,
-		});
-		commands.Barrier({
-			.image = depthImage_,
-			.newLayout = Velos::RHI::ImageLayout::DepthAttachment,
-			.aspect = Velos::RHI::ImageAspect::Depth,
-		});
+
+		const auto graphDimensions = device_->GetSwapchainDimensions();
+		auto& backbufferInfo = std::get<FrameGraphTextureInfo>(
+			frameGraph_.GetResource("backbuffer")->info);
+		backbufferInfo.width = graphDimensions.width;
+		backbufferInfo.height = graphDimensions.height;
+		backbufferInfo.handle = frame_.backbufferImage;
+		backbufferInfo.view = frame_.backbuffer;
+
+		auto& depthInfo = std::get<FrameGraphTextureInfo>(
+			frameGraph_.GetResource("depth")->info);
+		depthInfo.width = graphDimensions.width;
+		depthInfo.height = graphDimensions.height;
+		depthInfo.handle = depthImage_;
+		depthInfo.view = depthView_;
 
 		frameActive_ = true;
 		return true;
-	}
-
-	void Renderer::BeginScenePass()
-	{
-		if (!frameActive_) {
-			throw std::logic_error("Renderer::BeginScenePass called outside an active frame");
-		}
-
-		const Color clearColor = Color::CornflowerBlue;
-
-		const auto dimensions = device_->GetSwapchainDimensions();
-		const Velos::RHI::ColorAttachmentDesc attachment{
-			.view = frame_.backbuffer,
-			.loadOp = Velos::RHI::LoadOp::Clear,
-			.storeOp = Velos::RHI::StoreOp::Store,
-			.clearValue = {
-				clearColor.R(),
-				clearColor.G(),
-				clearColor.B(),
-				clearColor.A(),
-			},
-		};
-		const Velos::RHI::DepthAttachmentDesc depthAttachment{
-			.view = depthView_,
-			.loadOp = Velos::RHI::LoadOp::Clear,
-			.storeOp = Velos::RHI::StoreOp::Store,
-			.clearDepth = 1.0f,
-			.clearStencil = 0
-		};
-
-		auto& commands = device_->GetCommandList();
-		commands.BeginRendering({
-			.renderArea = {{0, 0}, dimensions},
-			.colorAttachments = &attachment,
-			.colorAttachmentCount = 1,
-			.depthAttachment = &depthAttachment,
-		});
-		commands.SetViewport({
-			.x = 0.0f,
-			.y = 0.0f,
-			.width = static_cast<float>(dimensions.width),
-			.height = static_cast<float>(dimensions.height),
-			.minDepth = 0.0f,
-			.maxDepth = 1.0f,
-		});
-		commands.SetScissor({
-			.offset = {0, 0},
-			.extent = dimensions,
-		});
-
-		scenePassActive_ = true;
 	}
 
 	void Renderer::DrawObject(
 		const RenderObject& object,
 		const FrameData& frameData)
 	{
-		if (!scenePassActive_) {
-			throw std::logic_error("Renderer::DrawObject called outside an active scene pass");
+		if (!frameActive_) {
+			throw std::logic_error("Renderer::DrawObject called outside an active frame");
 		}
 
 		GpuMesh* mesh = object.mesh ? ResolveOrCreateMesh(object.mesh) : nullptr;
@@ -330,7 +350,7 @@ namespace Iryven {
 
 	void Renderer::DrawText(const RenderText& text)
 	{
-		if (!scenePassActive_ || text.text.empty() || text.fontSize <= 0.0f) {
+		if (!frameActive_ || text.text.empty() || text.fontSize <= 0.0f) {
 			return;
 		}
 		GpuFont* gpuFont = ResolveOrCreateFont(text.font);
@@ -570,11 +590,6 @@ namespace Iryven {
 		}
 
 		auto& commands = device_->GetCommandList();
-		if (scenePassActive_) {
-			commands.EndRendering();
-			scenePassActive_ = false;
-		}
-
 		ProcessAssetUploads();
 
 		commands.Barrier({

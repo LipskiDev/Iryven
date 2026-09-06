@@ -8,6 +8,7 @@
 
 #include <iryven/math/color.h>
 #include <iryven/rendering/frame_data.h>
+#include <iryven/rendering/framegraph.h>
 #include <iryven/rendering/render_scene.h>
 #include <iryven/rendering/render_context.h>
 #include <iryven/window.h>
@@ -34,7 +35,6 @@ namespace Iryven {
 		void EndFrame();
 
 	private:
-		void BeginScenePass();
 		void DrawObject(
 			const RenderObject& object,
 			const FrameData& frameData);
@@ -97,6 +97,8 @@ namespace Iryven {
 		void DestroyGpuModel(GpuModel& model);
 
 	private:
+		class OpaquePass;
+
 		Window& window_;
 		AssetUploadQueue& assetUploads_;
 
@@ -105,6 +107,9 @@ namespace Iryven {
 		Velos::RHI::FrameBeginResult frame_;
 		Velos::RHI::ImageHandle depthImage_;
 		Velos::RHI::ImageViewHandle depthView_;
+		FrameGraphBuilder frameGraphBuilder_;
+		FrameGraph frameGraph_;
+		std::unique_ptr<OpaquePass> opaquePass_;
 
 		std::unordered_map<const MeshData*, GpuMesh> meshes_;
 		std::unordered_map<const Font*, GpuFont> fonts_;
@@ -162,7 +167,6 @@ namespace Iryven {
 
 		bool swapchainDirty_ = false;
 		bool frameActive_ = false;
-		bool scenePassActive_ = false;
 	};
 
 }
