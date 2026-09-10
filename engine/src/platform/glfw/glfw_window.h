@@ -49,7 +49,7 @@ namespace Iryven {
 		struct WindowData {
 			std::string title ;
 			uint32_t width = 0, height = 0;
-			bool vsync = true;
+			bool vsync = false;
 
 			EventCallbackFn eventCallback;
 		};
