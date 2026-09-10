@@ -8,6 +8,9 @@ namespace Iryven {
 	public:
 		Entity() = default;
 		explicit Entity(flecs::entity entity) : entity_(entity) {}
+		[[nodiscard]] bool IsAlive() const { return entity_.is_alive(); }
+		[[nodiscard]] uint64_t GetId() const { return entity_.id(); }
+		[[nodiscard]] const char* GetName() const { return entity_.name().c_str(); }
 		template<typename T, typename... Args>
 		T& Add(Args&&... args);
 

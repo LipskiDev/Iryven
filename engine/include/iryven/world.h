@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <string>
@@ -25,6 +26,8 @@ public:
     World& operator=(const World&) = delete;
 
     Entity CreateEntity(std::string_view name);
+    // Visit entities created through the scene API outside World::Progress.
+    void ForEachEntity(const std::function<void(Entity)>& visitor);
 
     template<typename... Components>
     void AddSystem(
@@ -32,10 +35,20 @@ public:
         std::function<void(float, Components&...)> function);
 
     bool Progress(float deltaTime = 0.0f);
+    void ResetPhysics();
     void ResolveAssetReferences(const AsynchronousLoader& loader);
 
     [[nodiscard]] RenderScene ExtractRenderScene() const;
+
+	void SerializeScene(const std::filesystem::path& path) const;
+	// Imports into the existing world using Flecs merge semantics; does not clear it.
+	// Component values require registered reflection. Parse errors may leave partial changes.
+	void DeserializeScene(const std::filesystem::path& path);
+	[[nodiscard]] flecs::world& GetFlecsWorld() { return world_; }
+	[[nodiscard]] const flecs::world& GetFlecsWorld() const { return world_; }
 private:
+    struct SceneEntityTag {};
+
     flecs::world world_;
 	std::unique_ptr<PhysicsWorld> physics_;
 };

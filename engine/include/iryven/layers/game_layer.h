@@ -16,6 +16,8 @@ public:
     World& CreateWorld();
     [[nodiscard]] World& GetWorld() noexcept;
     [[nodiscard]] const World& GetWorld() const noexcept;
+    void SetSimulationEnabled(bool enabled) noexcept { simulationEnabled_ = enabled; }
+    [[nodiscard]] bool IsSimulationEnabled() const noexcept { return simulationEnabled_; }
 
     void OnUpdate(float deltaTime) override;
     void OnRender(RenderContext& context) override;
@@ -23,6 +25,7 @@ public:
 
 private:
     std::unique_ptr<World> world_;
+    bool simulationEnabled_ = true;
 };
 
 } // namespace Iryven

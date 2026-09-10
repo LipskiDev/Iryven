@@ -25,7 +25,7 @@ const World& GameLayer::GetWorld() const noexcept
 
 void GameLayer::OnUpdate(float deltaTime)
 {
-    world_->Progress(deltaTime);
+    if (simulationEnabled_) world_->Progress(deltaTime);
 }
 
 void GameLayer::OnRender(RenderContext& context)

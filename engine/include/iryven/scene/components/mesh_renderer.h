@@ -13,6 +13,8 @@
 namespace Iryven {
 
 struct MeshRenderer {
+    MeshRenderer() = default;
+
     explicit MeshRenderer(std::shared_ptr<const MeshData> mesh, MaterialHandle material = {})
         : mesh(std::move(mesh)), material(std::move(material)) {
         if (!this->mesh) throw std::invalid_argument("MeshRenderer requires mesh data");
