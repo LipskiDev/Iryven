@@ -18,6 +18,7 @@
 #include <iryven/renderer/asset_upload_queue.h>
 
 namespace Iryven {
+    class ImGuiRenderer;
 
 	constexpr uint32_t k_MaxLightSources = 128;
 	constexpr uint32_t k_FramesInFlight = 2;
@@ -32,6 +33,10 @@ namespace Iryven {
 
 		[[nodiscard]] bool BeginFrame();
 		void DrawScene(const RenderScene& renderScene) override;
+        void InitializeImGui();
+        void ShutdownImGui();
+        void BeginImGuiFrame();
+        void DrawImGui();
 		void EndFrame();
 
 	private:
@@ -108,6 +113,7 @@ namespace Iryven {
 		AssetUploadQueue& assetUploads_;
 
 		std::unique_ptr<Velos::RHI::IDevice> device_;
+        std::unique_ptr<ImGuiRenderer> imGui_;
 		Velos::RHI::SwapchainHandle swapchain_;
 		Velos::RHI::FrameBeginResult frame_;
 		Velos::RHI::ImageHandle depthImage_;

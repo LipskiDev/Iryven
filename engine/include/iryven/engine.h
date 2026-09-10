@@ -21,11 +21,13 @@
 namespace Iryven {
 
 class Renderer;
+class ImGuiIntegration;
 
 struct EngineConfig {
     std::string title = "Iryven";
     uint32_t width = 1920;
     uint32_t height = 1080;
+    bool enableImGui = false;
 };
 
 class Engine {
@@ -37,6 +39,7 @@ public:
     [[nodiscard]] const World& GetWorld() const noexcept;
     [[nodiscard]] const EngineConfig& GetConfig() const noexcept;
     InputHandler& GetInput();
+    [[nodiscard]] Window& GetWindow() noexcept { return *window_; }
     [[nodiscard]] AssetManager& GetAssets() noexcept;
     [[nodiscard]] const AssetManager& GetAssets() const noexcept;
     [[nodiscard]] AsynchronousLoader& GetAsyncLoader() noexcept;
@@ -68,6 +71,8 @@ private:
     AssetUploadQueue assetUploads_;
     std::unique_ptr<AsynchronousLoader> asynchronousLoader_;
     std::unique_ptr<Renderer> renderer_;
+    // Destroy after application layers and before the renderer/window.
+    std::unique_ptr<ImGuiIntegration> imGui_;
     LayerStack layers_;
     GameLayer* gameLayer_ = nullptr;
     UILayer* uiLayer_ = nullptr;

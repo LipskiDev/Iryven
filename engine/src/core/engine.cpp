@@ -1,6 +1,7 @@
 #include <iryven/engine.h>
 #include <iryven/log.h>
 #include "../renderer/renderer.h"
+#include "imgui_integration.h"
 
 #include <chrono>
 #include <stdexcept>
@@ -26,6 +27,8 @@ Engine::Engine(EngineConfig config)
         [this](Event& event) {
             OnEvent(event);
         });
+
+    if (config_.enableImGui) imGui_ = std::make_unique<ImGuiIntegration>(*window_, *renderer_);
 
     gameLayer_ = &static_cast<GameLayer&>(
         layers_.PushLayer(std::make_unique<GameLayer>()));
@@ -107,8 +110,14 @@ void Engine::Render()
         return;
     }
 
+    if (imGui_) {
+        imGui_->BeginFrame();
+        layers_.RenderImGui();
+        imGui_->EndFrame();
+    }
     gameLayer_->ResolveAssetReferences(*asynchronousLoader_);
     layers_.Render(*renderer_);
+    if (imGui_) renderer_->DrawImGui();
     renderer_->EndFrame();
 
     if (!firstFramePresented_) {

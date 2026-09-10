@@ -19,6 +19,7 @@ public:
 
     void Update(float deltaTime);
     void Render(RenderContext& context);
+    void RenderImGui();
     void PropagateEvent(Event& event);
 
     [[nodiscard]] std::size_t Size() const noexcept { return layers_.size(); }

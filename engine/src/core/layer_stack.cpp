@@ -93,4 +93,9 @@ void LayerStack::PropagateEvent(Event& event)
     }
 }
 
+void LayerStack::RenderImGui()
+{
+    for (auto& layer : layers_) layer->OnImGuiRender();
+}
+
 } // namespace Iryven

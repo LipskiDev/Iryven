@@ -1,4 +1,5 @@
 #include "renderer.h"
+#include "imgui_renderer.h"
 
 #include <algorithm>
 #include <array>
@@ -611,6 +612,25 @@ namespace Iryven {
 		lastSubmittedSerial_ = nextSubmissionSerial_++;
 		frameSubmissionSerials_.at(frame_.frameIndex) = lastSubmittedSerial_;
 		frameActive_ = false;
+	}
+
+    void Renderer::InitializeImGui() { imGui_ = std::make_unique<ImGuiRenderer>(*device_); }
+    void Renderer::ShutdownImGui() { imGui_.reset(); }
+    void Renderer::BeginImGuiFrame() { imGui_->BeginFrame(); }
+
+	void Renderer::DrawImGui()
+	{
+		if (!frameActive_ || !imGui_) return;
+		auto& commands = device_->GetCommandList();
+		commands.Barrier({ .image = frame_.backbufferImage,
+			.newLayout = Velos::RHI::ImageLayout::ColorAttachment });
+		const auto size = device_->GetSwapchainDimensions();
+		const Velos::RHI::ColorAttachmentDesc color{
+			.view = frame_.backbuffer, .loadOp = Velos::RHI::LoadOp::Load };
+		commands.BeginRendering({ .renderArea = { 0, 0, size.width, size.height },
+			.colorAttachments = &color, .colorAttachmentCount = 1 });
+		imGui_->Draw();
+		commands.EndRendering();
 	}
 
 	void Renderer::ProcessAssetUploads()

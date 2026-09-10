@@ -60,6 +60,12 @@ project "Iryven"
         "engine/include/**.h",
         "engine/src/**.h",
         "engine/src/**.cpp",
+        "external/velos/external/imgui/imgui.cpp",
+        "external/velos/external/imgui/imgui_draw.cpp",
+        "external/velos/external/imgui/imgui_tables.cpp",
+        "external/velos/external/imgui/imgui_widgets.cpp",
+        "external/velos/external/imgui/backends/imgui_impl_glfw.cpp",
+        "external/velos/external/imgui/backends/imgui_impl_vulkan.cpp",
         "assets/shaders/internal/**.vert",
         "assets/shaders/internal/**.frag",
         "assets/shaders/internal/**.hlsl"
@@ -69,9 +75,13 @@ project "Iryven"
         "external/glfw/include",
         "external/velos/external/stb",
         "external/fastgltf/include",
-        "engine/src/third_party"
+        "engine/src/third_party",
+        "external/velos/external/imgui", "external/velos/velos/core",
+        "external/velos/external/volk", "external/velos/external/vma/include",
+        "external/velos/external/tracy/public", vulkanSdk .. "/Include"
     }
     defines (IryvenPublicDefines)
+    defines { "GLFW_INCLUDE_NONE", "IMGUI_IMPL_VULKAN_NO_PROTOTYPES" }
     links { "Velos", "spdlog", "Flecs", "Box3D", "MSDFAtlasGen", "fastgltf", "enkiTS" }
 
     -- Compile GLSL to SPIR-V at build time. Runtime shader loading still
@@ -145,6 +155,35 @@ project "Sandbox"
     filter { "configurations:Release or Profile" }
         runtime "Release"
         optimize "Speed"
+    filter {}
+
+project "Editor"
+    location "build/Editor"
+    kind "ConsoleApp"
+    language "C++"
+    cppdialect "C++20"
+    staticruntime "off"
+    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
+    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+    debugdir (_WORKING_DIR)
+    files { "editor/**.h", "editor/**.cpp" }
+    includedirs (IryvenPublicIncludeDirs)
+    includedirs { "external/velos/external/imgui", "external/glfw/include" }
+    defines (IryvenPublicDefines)
+    defines { "GLFW_INCLUDE_NONE" }
+    links { "Iryven" }
+    filter "system:windows"
+        systemversion "latest"
+        buildoptions { "/utf-8" }
+    filter "configurations:Debug or DebugLivePP"
+        runtime "Debug"
+        symbols "On"
+    filter { "configurations:Release or Profile" }
+        runtime "Release"
+        optimize "Speed"
+    filter "configurations:Profile"
+
+        symbols "On"
     filter {}
 
 project "IryvenTests"

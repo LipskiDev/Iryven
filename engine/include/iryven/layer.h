@@ -22,6 +22,8 @@ public:
     virtual void OnDetach() {}
     virtual void OnUpdate(float deltaTime) {}
     virtual void OnRender(RenderContext& context) {}
+    // Called inside an ImGui frame when EngineConfig::enableImGui is enabled.
+    virtual void OnImGuiRender() {}
 
     // Returning true consumes the event and stops propagation to lower layers.
     virtual bool OnEvent(Event& event) { return false; }
