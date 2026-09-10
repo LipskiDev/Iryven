@@ -36,12 +36,17 @@ namespace Iryven {
 
 	private:
 		void DrawObject(
+			Velos::RHI::ICommandList& commands,
 			const RenderObject& object,
 			const FrameData& frameData);
-		void DrawText(const RenderText& text);
-		void UploadLights(const std::vector<RenderLight>& lights);
-		void UploadFrameData(const FrameData& frameData);
-		void UploadMaterials(const std::vector<RenderObject>& objects);
+		void DrawText(Velos::RHI::ICommandList& commands,
+			const RenderText& text);
+		void UploadLights(Velos::RHI::ICommandList& commands,
+			const std::vector<RenderLight>& lights);
+		void UploadFrameData(Velos::RHI::ICommandList& commands,
+			const FrameData& frameData);
+		void UploadMaterials(Velos::RHI::ICommandList& commands,
+			const std::vector<RenderObject>& objects);
 		[[nodiscard]] FrameData BuildFrameData(
 			const RenderCamera& camera) const;
 

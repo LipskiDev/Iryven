@@ -59,6 +59,26 @@ void ValidateOutput(const FrameGraphResourceOutputCreation& creation)
     }
 }
 
+[[nodiscard]] bool IsConcurrent(const FrameGraphResourceInfo& info)
+{
+    if (const auto* buffer = std::get_if<FrameGraphBufferInfo>(&info)) {
+        return buffer->concurrentQueues;
+    }
+    if (const auto* texture = std::get_if<FrameGraphTextureInfo>(&info)) {
+        return texture->concurrentQueues;
+    }
+    return true;
+}
+
+void EnableConcurrentQueues(FrameGraphResourceInfo& info)
+{
+    if (auto* buffer = std::get_if<FrameGraphBufferInfo>(&info)) {
+        buffer->concurrentQueues = true;
+    } else if (auto* texture = std::get_if<FrameGraphTextureInfo>(&info)) {
+        texture->concurrentQueues = true;
+    }
+}
+
 } // namespace
 
 void FrameGraphBuilder::Init(Velos::RHI::IDevice& device)
@@ -110,6 +130,7 @@ void FrameGraphBuilder::AllocateResource(FrameGraphResource& resource)
             buffer->handle = Device().CreateBuffer({
                 .size = static_cast<Velos::u64>(buffer->size),
                 .usage = buffer->usage,
+                .concurrentQueues = buffer->concurrentQueues,
                 .debugName = resource.name.c_str(),
             });
             if (!buffer->handle.IsValid()) {
@@ -130,6 +151,7 @@ void FrameGraphBuilder::AllocateResource(FrameGraphResource& resource)
             .depth = texture->depth,
             .format = texture->format,
             .usage = texture->usage,
+            .concurrentQueues = texture->concurrentQueues,
             .debugName = resource.name.c_str(),
         });
         if (!texture->handle.IsValid()) {
@@ -313,6 +335,7 @@ FrameGraphNodeHandle FrameGraphBuilder::CreateNode(
         static_cast<FrameGraphHandle>(nodes_.size()) };
     FrameGraphNode node;
     node.name = creation.name;
+    node.queue = creation.queue;
     node.enabled = creation.enabled;
     node.inputs.reserve(creation.inputs.size());
     node.outputs.reserve(creation.outputs.size());
@@ -401,10 +424,14 @@ void FrameGraph::Init(FrameGraphBuilder& builder)
     builder_ = &builder;
     nodes_.reserve(FrameGraphBuilder::kMaxNodes);
     executionOrder_.reserve(FrameGraphBuilder::kMaxNodes);
+    executionBatches_.reserve(3);
+    queueTimelines_.reserve(2);
+    graphicsSubmissionWaits_.reserve(2);
 }
 
 void FrameGraph::Shutdown()
 {
+    DestroyTimelines();
     Reset();
     builder_ = nullptr;
 }
@@ -419,6 +446,8 @@ void FrameGraph::Reset()
 {
     nodes_.clear();
     executionOrder_.clear();
+    executionBatches_.clear();
+    graphicsSubmissionWaits_.clear();
     if (builder_ != nullptr) builder_->Reset();
 }
 
@@ -449,6 +478,7 @@ void FrameGraph::Compile()
     }
 
     executionOrder_.clear();
+    executionBatches_.clear();
     std::vector<std::uint32_t> indegrees(nodes_.size(), 0);
     std::size_t enabledNodeCount = 0;
 
@@ -457,7 +487,24 @@ void FrameGraph::Compile()
         assert(node != nullptr);
         node->edges.clear();
         node->referenceCount = 0;
-        if (node->enabled) ++enabledNodeCount;
+        if (node->enabled) {
+            ++enabledNodeCount;
+            if (node->queue != Velos::RHI::QueueType::Graphics) {
+                const auto usesAttachment = [this](FrameGraphResourceHandle handle) {
+                    const FrameGraphResource* resource = AccessResource(handle);
+                    return resource != nullptr &&
+                           resource->type == FrameGraphResourceType::Attachment;
+                };
+                if (std::any_of(node->inputs.begin(), node->inputs.end(),
+                                usesAttachment) ||
+                    std::any_of(node->outputs.begin(), node->outputs.end(),
+                                usesAttachment)) {
+                    throw std::logic_error(
+                        "Non-graphics frame-graph pass '" + node->name +
+                        "' cannot use render attachments");
+                }
+            }
+        }
     }
     for (FrameGraphHandle index = 0; index < FrameGraphBuilder::kMaxResources; ++index) {
         FrameGraphResource* resource = AccessResource({ index });
@@ -491,6 +538,17 @@ void FrameGraph::Compile()
                 throw std::logic_error("Enabled node '" + child->name +
                                        "' depends on disabled producer for '" +
                                        input->name + "'");
+            }
+
+            if (parent->queue != child->queue &&
+                output->type != FrameGraphResourceType::Reference) {
+                if (output->external && !IsConcurrent(output->info)) {
+                    throw std::logic_error(
+                        "External resource '" + output->name +
+                        "' crosses frame-graph queues but was not declared "
+                        "concurrentQueues");
+                }
+                EnableConcurrentQueues(output->info);
             }
 
             input->producer = output->producer;
@@ -536,6 +594,32 @@ void FrameGraph::Compile()
             builder_->AllocateResource(*resource);
         }
     }
+
+    std::vector<std::size_t> nodeBatches(
+        nodes_.size(), std::numeric_limits<std::size_t>::max());
+    for (FrameGraphNodeHandle handle : executionOrder_) {
+        const FrameGraphNode* node = AccessNode(handle);
+        if (executionBatches_.empty() ||
+            executionBatches_.back().queue != node->queue) {
+            executionBatches_.push_back({ .queue = node->queue });
+        }
+        nodeBatches[handle.handle] = executionBatches_.size() - 1;
+        executionBatches_.back().nodes.push_back(handle);
+    }
+
+    for (FrameGraphNodeHandle parentHandle : executionOrder_) {
+        const FrameGraphNode* parent = AccessNode(parentHandle);
+        const std::size_t parentBatch = nodeBatches[parentHandle.handle];
+        for (FrameGraphNodeHandle childHandle : parent->edges) {
+            const std::size_t childBatch = nodeBatches[childHandle.handle];
+            if (parentBatch == childBatch) continue;
+            auto& dependencies = executionBatches_[childBatch].dependencies;
+            if (std::find(dependencies.begin(), dependencies.end(), parentBatch) ==
+                dependencies.end()) {
+                dependencies.push_back(parentBatch);
+            }
+        }
+    }
 }
 
 void FrameGraph::AddUI()
@@ -546,10 +630,52 @@ void FrameGraph::AddUI()
     }
 }
 
-void FrameGraph::Render(
+void FrameGraph::BeginFrame()
+{
+    graphicsSubmissionWaits_.clear();
+}
+
+FrameGraph::QueueTimelineState& FrameGraph::TimelineFor(
+    Velos::RHI::QueueType queue)
+{
+    const auto found = std::find_if(
+        queueTimelines_.begin(), queueTimelines_.end(),
+        [queue](const QueueTimelineState& timeline) {
+            return timeline.queue == queue;
+        });
+    if (found != queueTimelines_.end()) return *found;
+
+    QueueTimelineState timeline{
+        .queue = queue,
+        .semaphore = builder_->Device().CreateSemaphore(
+            Velos::RHI::SemaphoreType::Timeline),
+    };
+    if (!timeline.semaphore.IsValid()) {
+        throw std::runtime_error("Failed to create frame-graph queue timeline");
+    }
+    queueTimelines_.push_back(timeline);
+    return queueTimelines_.back();
+}
+
+void FrameGraph::DestroyTimelines()
+{
+    if (queueTimelines_.empty()) return;
+    if (builder_ != nullptr && builder_->device_ != nullptr) {
+        builder_->Device().WaitIdle();
+        for (const QueueTimelineState& timeline : queueTimelines_) {
+            if (timeline.semaphore.IsValid()) {
+                builder_->Device().DestroySemaphore(timeline.semaphore);
+            }
+        }
+    }
+    queueTimelines_.clear();
+}
+
+void FrameGraph::RecordBatch(
+    const FrameGraphQueueBatch& batch,
     Velos::RHI::ICommandList& commandList, const RenderScene& scene)
 {
-    for (FrameGraphNodeHandle handle : executionOrder_) {
+    for (FrameGraphNodeHandle handle : batch.nodes) {
         FrameGraphNode* node = AccessNode(handle);
         if (node->graphRenderPass == nullptr) {
             throw std::logic_error("No render-pass implementation registered for '" +
@@ -670,6 +796,74 @@ void FrameGraph::Render(
             throw;
         }
         if (hasAttachments) commandList.EndRendering();
+    }
+}
+
+void FrameGraph::Render(const RenderScene& scene)
+{
+    if (builder_ == nullptr) {
+        throw std::logic_error("FrameGraph is not initialized");
+    }
+
+    std::vector<Velos::RHI::TimelineSemaphorePoint> batchSignals(
+        executionBatches_.size());
+    const auto appendGraphicsWait = [this](
+        const Velos::RHI::TimelineSemaphorePoint& point) {
+        const auto found = std::find_if(
+            graphicsSubmissionWaits_.begin(), graphicsSubmissionWaits_.end(),
+            [&point](const Velos::RHI::TimelineSemaphorePoint& wait) {
+                return wait.semaphore.id == point.semaphore.id;
+            });
+        if (found == graphicsSubmissionWaits_.end()) {
+            graphicsSubmissionWaits_.push_back(point);
+        } else {
+            found->value = std::max(found->value, point.value);
+        }
+    };
+
+    for (std::size_t batchIndex = 0;
+         batchIndex < executionBatches_.size(); ++batchIndex) {
+        const FrameGraphQueueBatch& batch = executionBatches_[batchIndex];
+        std::vector<Velos::RHI::TimelineSemaphorePoint> waits;
+        waits.reserve(batch.dependencies.size());
+        for (std::size_t dependency : batch.dependencies) {
+            if (dependency >= batchIndex ||
+                !batchSignals[dependency].semaphore.IsValid()) {
+                throw std::logic_error(
+                    "Frame-graph queue dependency was not submitted");
+            }
+            if (executionBatches_[dependency].queue != batch.queue) {
+                waits.push_back(batchSignals[dependency]);
+            }
+        }
+
+        QueueTimelineState& timeline = TimelineFor(batch.queue);
+        Velos::RHI::ICommandList& queueCommands =
+            builder_->Device().AcquireCommandList(batch.queue);
+        queueCommands.Begin();
+        RecordBatch(batch, queueCommands, scene);
+        queueCommands.End();
+
+        if (timeline.nextSignalValue ==
+            std::numeric_limits<std::uint64_t>::max()) {
+            throw std::overflow_error("Frame-graph queue timeline exhausted");
+        }
+        const Velos::RHI::TimelineSemaphorePoint signal{
+            timeline.semaphore, timeline.nextSignalValue++ };
+        const Velos::RHI::TimelineSemaphorePoint signals[] = { signal };
+        builder_->Device().Submit(batch.queue, queueCommands, {
+            .waits = waits,
+            .signals = signals,
+        });
+        batchSignals[batchIndex] = signal;
+    }
+
+    for (std::size_t batchIndex = 0;
+         batchIndex < executionBatches_.size(); ++batchIndex) {
+        if (executionBatches_[batchIndex].queue !=
+            Velos::RHI::QueueType::Graphics) {
+            appendGraphicsWait(batchSignals[batchIndex]);
+        }
     }
 }
 

@@ -94,27 +94,27 @@ namespace Iryven {
 		void AddUI() override {}
 
 		void PreRender(
-			Velos::RHI::ICommandList&, const RenderScene& scene) override
+			Velos::RHI::ICommandList& commands, const RenderScene& scene) override
 		{
-			renderer_.UploadLights(scene.lights);
-			renderer_.UploadMaterials(scene.objects);
+			renderer_.UploadLights(commands, scene.lights);
+			renderer_.UploadMaterials(commands, scene.objects);
 			hasCamera_ = scene.camera.has_value();
 			if (hasCamera_) {
 				frameData_ = renderer_.BuildFrameData(*scene.camera);
-				renderer_.UploadFrameData(frameData_);
+				renderer_.UploadFrameData(commands, frameData_);
 			}
 		}
 
 		void Render(
-			Velos::RHI::ICommandList&, const RenderScene& scene) override
+			Velos::RHI::ICommandList& commands, const RenderScene& scene) override
 		{
 			if (hasCamera_) {
 				for (const RenderObject& object : scene.objects) {
-					renderer_.DrawObject(object, frameData_);
+					renderer_.DrawObject(commands, object, frameData_);
 				}
 			}
 			for (const RenderText& text : scene.texts) {
-				renderer_.DrawText(text);
+				renderer_.DrawText(commands, text);
 			}
 		}
 
@@ -233,7 +233,7 @@ namespace Iryven {
 			throw std::logic_error("Renderer::DrawScene called outside an active frame");
 		}
 
-		frameGraph_.Render(device_->GetCommandList(), renderScene);
+		frameGraph_.Render(renderScene);
 	}
 
 	bool Renderer::BeginFrame()
@@ -281,6 +281,7 @@ namespace Iryven {
 
 		auto& commands = device_->GetCommandList();
 		commands.Begin();
+		frameGraph_.BeginFrame();
 
 		const auto graphDimensions = device_->GetSwapchainDimensions();
 		auto& backbufferInfo = std::get<FrameGraphTextureInfo>(
@@ -302,6 +303,7 @@ namespace Iryven {
 	}
 
 	void Renderer::DrawObject(
+		Velos::RHI::ICommandList& commands,
 		const RenderObject& object,
 		const FrameData& frameData)
 	{
@@ -330,7 +332,6 @@ namespace Iryven {
 			.materialIndex = materialSlot == materialSlots_.end() ? 0u : materialSlot->second
 		};
 
-		auto& commands = device_->GetCommandList();
 		commands.BindPipeline(gltfPipeline_);
 		commands.SetBindings(
 			gltfPipeline_, 0,
@@ -348,7 +349,8 @@ namespace Iryven {
 		else commands.DrawIndexed(mesh->indexCount);
 	}
 
-	void Renderer::DrawText(const RenderText& text)
+	void Renderer::DrawText(
+		Velos::RHI::ICommandList& commands, const RenderText& text)
 	{
 		if (!frameActive_ || text.text.empty() || text.fontSize <= 0.0f) {
 			return;
@@ -428,14 +430,15 @@ namespace Iryven {
 		});
 		textVertexBuffers_.at(frame_.frameIndex).push_back(vertexBuffer);
 
-		auto& commands = device_->GetCommandList();
 		commands.BindPipeline(textPipeline_);
 		commands.SetBindings(textPipeline_, 0, gpuFont->bindingSet);
 		commands.BindVertexBuffer(0, vertexBuffer);
 		commands.Draw(static_cast<Velos::u32>(vertices.size()));
 	}
 
-	void Renderer::UploadLights(const std::vector<RenderLight>& lights)
+	void Renderer::UploadLights(
+		Velos::RHI::ICommandList& commands,
+		const std::vector<RenderLight>& lights)
 	{
 		struct alignas(16) GpuLight {
 			glm::vec4 positionAndType;
@@ -464,7 +467,7 @@ namespace Iryven {
 			};
 		}
 
-		device_->GetCommandList().UpdateBuffer({
+		commands.UpdateBuffer({
 			.buffer = lightingFrames_.at(frame_.frameIndex).lightBuffer,
 			.offset = 0,
 			.data = &gpuLights,
@@ -472,7 +475,8 @@ namespace Iryven {
 		});
 	}
 
-	void Renderer::UploadFrameData(const FrameData& frameData)
+	void Renderer::UploadFrameData(
+		Velos::RHI::ICommandList& commands, const FrameData& frameData)
 	{
 		struct alignas(16) GpuFrameData {
 			glm::mat4 view;
@@ -486,7 +490,7 @@ namespace Iryven {
 			.viewProjection = frameData.viewProjection,
 			.cameraPosition = glm::vec4(frameData.cameraPosition, 1.0f)
 		};
-		device_->GetCommandList().UpdateBuffer({
+		commands.UpdateBuffer({
 			.buffer = lightingFrames_.at(frame_.frameIndex).frameDataBuffer,
 			.offset = 0,
 			.data = &gpuFrameData,
@@ -494,7 +498,9 @@ namespace Iryven {
 		});
 	}
 
-	void Renderer::UploadMaterials(const std::vector<RenderObject>& objects)
+	void Renderer::UploadMaterials(
+		Velos::RHI::ICommandList& commands,
+		const std::vector<RenderObject>& objects)
 	{
 		materialSlots_.clear();
 		std::vector<GpuMaterial> materials;
@@ -548,7 +554,7 @@ namespace Iryven {
 			});
 		}
 
-		device_->GetCommandList().UpdateBuffer({
+		commands.UpdateBuffer({
 			.buffer = lightingFrames_.at(frame_.frameIndex).materialBuffer,
 			.offset = 0,
 			.data = materials.data(),
@@ -599,7 +605,9 @@ namespace Iryven {
 		});
 		commands.End();
 
-		device_->SubmitAndPresent(swapchain_);
+		device_->SubmitAndPresent(swapchain_, {
+			.waits = frameGraph_.GraphicsSubmissionWaits(),
+		});
 		lastSubmittedSerial_ = nextSubmissionSerial_++;
 		frameSubmissionSerials_.at(frame_.frameIndex) = lastSubmittedSerial_;
 		frameActive_ = false;

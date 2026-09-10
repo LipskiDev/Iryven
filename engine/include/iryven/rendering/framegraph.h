@@ -74,6 +74,7 @@ struct FrameGraphBufferInfo {
     std::size_t size = 0;
     Velos::RHI::BufferUsage usage{};
     Velos::RHI::BufferHandle handle{};
+    bool concurrentQueues = false;
 };
 
 struct FrameGraphTextureInfo {
@@ -89,6 +90,7 @@ struct FrameGraphTextureInfo {
     Velos::RHI::ImageHandle handle{};
     Velos::RHI::ImageViewHandle view{};
     bool resizeWithSwapchain = false;
+    bool concurrentQueues = false;
 };
 
 using FrameGraphResourceInfo =
@@ -122,6 +124,7 @@ struct FrameGraphNodeCreation {
     std::string name;
     std::vector<FrameGraphResourceInputCreation> inputs;
     std::vector<FrameGraphResourceOutputCreation> outputs;
+    Velos::RHI::QueueType queue = Velos::RHI::QueueType::Graphics;
     bool enabled = true;
 };
 
@@ -143,8 +146,15 @@ struct FrameGraphNode {
     std::vector<FrameGraphResourceHandle> inputs;
     std::vector<FrameGraphResourceHandle> outputs;
     std::vector<FrameGraphNodeHandle> edges;
+    Velos::RHI::QueueType queue = Velos::RHI::QueueType::Graphics;
     bool enabled = true;
     std::string name;
+};
+
+struct FrameGraphQueueBatch {
+    Velos::RHI::QueueType queue = Velos::RHI::QueueType::Graphics;
+    std::vector<FrameGraphNodeHandle> nodes;
+    std::vector<std::size_t> dependencies;
 };
 
 class FrameGraphBuilder {
@@ -205,7 +215,8 @@ public:
     void DisableRenderPass(std::string_view renderPassName);
     void Compile();
     void AddUI();
-    void Render(Velos::RHI::ICommandList& commandList, const RenderScene& scene);
+    void BeginFrame();
+    void Render(const RenderScene& scene);
     void OnResize(Velos::RHI::IDevice& device,
                   std::uint32_t width,
                   std::uint32_t height);
@@ -227,9 +238,35 @@ public:
         return executionOrder_;
     }
 
+    [[nodiscard]] std::span<const FrameGraphQueueBatch> ExecutionBatches() const noexcept
+    {
+        return executionBatches_;
+    }
+
+    [[nodiscard]] std::span<const Velos::RHI::TimelineSemaphorePoint>
+    GraphicsSubmissionWaits() const noexcept
+    {
+        return graphicsSubmissionWaits_;
+    }
+
 private:
+    struct QueueTimelineState {
+        Velos::RHI::QueueType queue = Velos::RHI::QueueType::Graphics;
+        Velos::RHI::SemaphoreHandle semaphore{};
+        std::uint64_t nextSignalValue = 1;
+    };
+
+    void RecordBatch(const FrameGraphQueueBatch& batch,
+                     Velos::RHI::ICommandList& commandList,
+                     const RenderScene& scene);
+    QueueTimelineState& TimelineFor(Velos::RHI::QueueType queue);
+    void DestroyTimelines();
+
     std::vector<FrameGraphNodeHandle> nodes_;
     std::vector<FrameGraphNodeHandle> executionOrder_;
+    std::vector<FrameGraphQueueBatch> executionBatches_;
+    std::vector<QueueTimelineState> queueTimelines_;
+    std::vector<Velos::RHI::TimelineSemaphorePoint> graphicsSubmissionWaits_;
     FrameGraphBuilder* builder_ = nullptr; // Non-owning.
 };
 
