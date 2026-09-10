@@ -18,6 +18,10 @@ public:
     [[nodiscard]] const World& GetWorld() const noexcept;
     void SetSimulationEnabled(bool enabled) noexcept { simulationEnabled_ = enabled; }
     [[nodiscard]] bool IsSimulationEnabled() const noexcept { return simulationEnabled_; }
+    [[nodiscard]] float GetSceneExtractionMs() const noexcept {
+        return sceneExtractionMs_;
+    }
+    [[nodiscard]] float GetDrawSceneMs() const noexcept { return drawSceneMs_; }
 
     void OnUpdate(float deltaTime) override;
     void OnRender(RenderContext& context) override;
@@ -26,6 +30,8 @@ public:
 private:
     std::unique_ptr<World> world_;
     bool simulationEnabled_ = true;
+    float sceneExtractionMs_ = 0.0f;
+    float drawSceneMs_ = 0.0f;
 };
 
 } // namespace Iryven

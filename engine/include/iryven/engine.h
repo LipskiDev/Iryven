@@ -30,6 +30,34 @@ struct EngineConfig {
     bool enableImGui = false;
 };
 
+struct CpuFrameTimings {
+    float frameMs = 0.0f;
+    float eventsMs = 0.0f;
+    float updateMs = 0.0f;
+    float beginFrameMs = 0.0f;
+    float frameFenceWaitMs = 0.0f;
+    float acquireImageMs = 0.0f;
+    float uiBuildMs = 0.0f;
+    float assetResolveMs = 0.0f;
+    float sceneRenderMs = 0.0f;
+    float sceneExtractionMs = 0.0f;
+    float frameGraphMs = 0.0f;
+    float frameGraphSchedulingMs = 0.0f;
+    float commandAcquireMs = 0.0f;
+    float commandBeginMs = 0.0f;
+    float resourceSetupMs = 0.0f;
+    float preRenderMs = 0.0f;
+    float uploadLightsMs = 0.0f;
+    float uploadMaterialsMs = 0.0f;
+    float uploadFrameDataMs = 0.0f;
+    float renderingSetupMs = 0.0f;
+    float drawRecordMs = 0.0f;
+    float commandEndMs = 0.0f;
+    float queueSubmitMs = 0.0f;
+    float uiDrawMs = 0.0f;
+    float presentMs = 0.0f;
+};
+
 class Engine {
 public:
     explicit Engine(EngineConfig config);
@@ -38,6 +66,7 @@ public:
     [[nodiscard]] World& GetWorld() noexcept;
     [[nodiscard]] const World& GetWorld() const noexcept;
     [[nodiscard]] const EngineConfig& GetConfig() const noexcept;
+    [[nodiscard]] const CpuFrameTimings& GetCpuFrameTimings() const noexcept;
     InputHandler& GetInput();
     [[nodiscard]] Window& GetWindow() noexcept { return *window_; }
     [[nodiscard]] AssetManager& GetAssets() noexcept;
@@ -60,7 +89,7 @@ private:
     void OnEvent(Event& event);
     bool OnWindowClose(WindowCloseEvent& event);
     void Update(float deltaTime);
-    void Render();
+    void Render(CpuFrameTimings& timings);
 
 private:
     EngineConfig config_;
@@ -78,6 +107,7 @@ private:
     UILayer* uiLayer_ = nullptr;
     DebugLayer* debugLayer_ = nullptr;
     bool firstFramePresented_ = false;
+    CpuFrameTimings cpuFrameTimings_{};
 };
 
 } // namespace Iryven

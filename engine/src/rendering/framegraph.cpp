@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <deque>
 #include <stdexcept>
 #include <unordered_set>
@@ -9,6 +10,14 @@
 
 namespace Iryven {
 namespace {
+
+using CpuClock = std::chrono::steady_clock;
+
+[[nodiscard]] float ElapsedMilliseconds(CpuClock::time_point start)
+{
+    return std::chrono::duration<float, std::milli>(CpuClock::now() - start)
+        .count();
+}
 
 [[nodiscard]] bool IsTextureResource(FrameGraphResourceType type)
 {
@@ -40,6 +49,181 @@ namespace {
     case RenderPassOperation::DontCare: return Velos::RHI::LoadOp::DontCare;
     }
     return Velos::RHI::LoadOp::DontCare;
+}
+
+[[nodiscard]] bool AccessReads(FrameGraphAccess access)
+{
+    switch (access) {
+    case FrameGraphAccess::VertexBufferRead:
+    case FrameGraphAccess::IndexBufferRead:
+    case FrameGraphAccess::UniformRead:
+    case FrameGraphAccess::IndirectRead:
+    case FrameGraphAccess::ShaderSampledRead:
+    case FrameGraphAccess::ShaderStorageRead:
+    case FrameGraphAccess::ShaderStorageReadWrite:
+    case FrameGraphAccess::ColorAttachmentRead:
+    case FrameGraphAccess::ColorAttachmentReadWrite:
+    case FrameGraphAccess::DepthStencilRead:
+    case FrameGraphAccess::DepthStencilReadWrite:
+    case FrameGraphAccess::TransferRead:
+        return true;
+    default:
+        return false;
+    }
+}
+
+[[nodiscard]] bool AccessWrites(FrameGraphAccess access)
+{
+    switch (access) {
+    case FrameGraphAccess::ShaderStorageWrite:
+    case FrameGraphAccess::ShaderStorageReadWrite:
+    case FrameGraphAccess::ColorAttachmentWrite:
+    case FrameGraphAccess::ColorAttachmentReadWrite:
+    case FrameGraphAccess::DepthStencilWrite:
+    case FrameGraphAccess::DepthStencilReadWrite:
+    case FrameGraphAccess::TransferWrite:
+        return true;
+    default:
+        return false;
+    }
+}
+
+[[nodiscard]] Velos::RHI::ResourceState ResourceStateFor(
+    FrameGraphAccess access)
+{
+    using State = Velos::RHI::ResourceState;
+    switch (access) {
+    case FrameGraphAccess::None: return State::Common;
+    case FrameGraphAccess::VertexBufferRead: return State::VertexBuffer;
+    case FrameGraphAccess::IndexBufferRead: return State::IndexBuffer;
+    case FrameGraphAccess::UniformRead: return State::UniformBuffer;
+    case FrameGraphAccess::IndirectRead: return State::IndirectArgument;
+    case FrameGraphAccess::ShaderSampledRead:
+    case FrameGraphAccess::ShaderStorageRead: return State::ShaderRead;
+    case FrameGraphAccess::ShaderStorageWrite: return State::ShaderWrite;
+    case FrameGraphAccess::ShaderStorageReadWrite: return State::ShaderReadWrite;
+    case FrameGraphAccess::ColorAttachmentRead: return State::ColorAttachmentRead;
+    case FrameGraphAccess::ColorAttachmentWrite: return State::ColorAttachmentWrite;
+    case FrameGraphAccess::ColorAttachmentReadWrite: return State::RenderTarget;
+    case FrameGraphAccess::DepthStencilRead: return State::DepthRead;
+    case FrameGraphAccess::DepthStencilWrite: return State::DepthWrite;
+    case FrameGraphAccess::DepthStencilReadWrite: return State::DepthReadWrite;
+    case FrameGraphAccess::TransferRead: return State::TransferSrc;
+    case FrameGraphAccess::TransferWrite: return State::TransferDst;
+    case FrameGraphAccess::Present: return State::Present;
+    case FrameGraphAccess::Auto: break;
+    }
+    throw std::logic_error("Unresolved automatic frame-graph access");
+}
+
+[[nodiscard]] Velos::RHI::ImageLayout ImageLayoutFor(FrameGraphAccess access)
+{
+    using Layout = Velos::RHI::ImageLayout;
+    switch (access) {
+    case FrameGraphAccess::ShaderSampledRead: return Layout::ShaderReadOnly;
+    case FrameGraphAccess::ShaderStorageRead:
+    case FrameGraphAccess::ShaderStorageWrite:
+    case FrameGraphAccess::ShaderStorageReadWrite: return Layout::General;
+    case FrameGraphAccess::ColorAttachmentRead:
+    case FrameGraphAccess::ColorAttachmentWrite:
+    case FrameGraphAccess::ColorAttachmentReadWrite: return Layout::ColorAttachment;
+    case FrameGraphAccess::DepthStencilRead:
+    case FrameGraphAccess::DepthStencilWrite:
+    case FrameGraphAccess::DepthStencilReadWrite: return Layout::DepthAttachment;
+    case FrameGraphAccess::TransferRead: return Layout::TransferSrc;
+    case FrameGraphAccess::TransferWrite: return Layout::TransferDst;
+    case FrameGraphAccess::Present: return Layout::Present;
+    default: return Layout::Undefined;
+    }
+}
+
+[[nodiscard]] FrameGraphAccess ResolveAccess(
+    FrameGraphAccess access, FrameGraphResourceType type,
+    const FrameGraphResourceInfo& info, bool input,
+    Velos::RHI::QueueType queue)
+{
+    if (access != FrameGraphAccess::Auto) return access;
+    if (type == FrameGraphResourceType::Reference) return FrameGraphAccess::None;
+    if (queue == Velos::RHI::QueueType::Transfer) {
+        return input ? FrameGraphAccess::TransferRead
+                     : FrameGraphAccess::TransferWrite;
+    }
+    if (type == FrameGraphResourceType::Attachment) {
+        const auto* texture = std::get_if<FrameGraphTextureInfo>(&info);
+        const bool depth = texture != nullptr && IsDepthFormat(texture->format);
+        if (depth) {
+            return FrameGraphAccess::DepthStencilReadWrite;
+        }
+        return FrameGraphAccess::ColorAttachmentReadWrite;
+    }
+    if (type == FrameGraphResourceType::Texture) {
+        return input ? FrameGraphAccess::ShaderSampledRead
+                     : FrameGraphAccess::ShaderStorageWrite;
+    }
+    return input ? FrameGraphAccess::ShaderStorageRead
+                 : FrameGraphAccess::ShaderStorageWrite;
+}
+
+void ValidateAccess(const FrameGraphResource& use, bool output,
+                    Velos::RHI::QueueType queue, std::string_view passName)
+{
+    if (use.access == FrameGraphAccess::Auto) {
+        throw std::logic_error("Frame-graph access was not resolved");
+    }
+    if (use.type == FrameGraphResourceType::Reference) {
+        if (use.access != FrameGraphAccess::None) {
+            throw std::logic_error("Reference resource '" + use.name +
+                                   "' must use FrameGraphAccess::None");
+        }
+        return;
+    }
+    if (use.access == FrameGraphAccess::None) {
+        throw std::logic_error("Pass '" + std::string(passName) +
+                               "' declares no access for resource '" +
+                               use.name + "'");
+    }
+    if (output && !AccessWrites(use.access)) {
+        throw std::logic_error("Output resource '" + use.name +
+                               "' must declare a write access");
+    }
+
+    const bool texture = IsTextureResource(use.type);
+    const FrameGraphAccess access = use.access;
+    const bool imageOnly = access == FrameGraphAccess::ShaderSampledRead ||
+        access == FrameGraphAccess::ColorAttachmentRead ||
+        access == FrameGraphAccess::ColorAttachmentWrite ||
+        access == FrameGraphAccess::ColorAttachmentReadWrite ||
+        access == FrameGraphAccess::DepthStencilRead ||
+        access == FrameGraphAccess::DepthStencilWrite ||
+        access == FrameGraphAccess::DepthStencilReadWrite ||
+        access == FrameGraphAccess::Present;
+    const bool bufferOnly = access == FrameGraphAccess::VertexBufferRead ||
+        access == FrameGraphAccess::IndexBufferRead ||
+        access == FrameGraphAccess::UniformRead ||
+        access == FrameGraphAccess::IndirectRead;
+    if ((imageOnly && !texture) || (bufferOnly && texture)) {
+        throw std::logic_error("Resource '" + use.name +
+                               "' has an access incompatible with its type");
+    }
+    if (queue == Velos::RHI::QueueType::Transfer &&
+        access != FrameGraphAccess::TransferRead &&
+        access != FrameGraphAccess::TransferWrite) {
+        throw std::logic_error("Transfer pass '" + std::string(passName) +
+                               "' declares a non-transfer resource access");
+    }
+    if (queue == Velos::RHI::QueueType::Compute &&
+        (access == FrameGraphAccess::VertexBufferRead ||
+         access == FrameGraphAccess::IndexBufferRead ||
+         access == FrameGraphAccess::ColorAttachmentRead ||
+         access == FrameGraphAccess::ColorAttachmentWrite ||
+         access == FrameGraphAccess::ColorAttachmentReadWrite ||
+         access == FrameGraphAccess::DepthStencilRead ||
+         access == FrameGraphAccess::DepthStencilWrite ||
+         access == FrameGraphAccess::DepthStencilReadWrite ||
+         access == FrameGraphAccess::Present)) {
+        throw std::logic_error("Compute pass '" + std::string(passName) +
+                               "' declares a graphics-only resource access");
+    }
 }
 
 void ValidateOutput(const FrameGraphResourceOutputCreation& creation)
@@ -260,6 +444,7 @@ FrameGraphResourceHandle FrameGraphBuilder::CreateNodeOutput(
         static_cast<FrameGraphHandle>(resources_.size()) };
     resources_.push_back(FrameGraphResource{
         .type = creation.type,
+        .access = creation.access,
         .info = creation.info,
         .external = creation.external,
         .producer = producer,
@@ -288,6 +473,7 @@ FrameGraphResourceHandle FrameGraphBuilder::CreateNodeInput(
         static_cast<FrameGraphHandle>(resources_.size()) };
     resources_.push_back(FrameGraphResource{
         .type = creation.type,
+        .access = creation.access,
         .info = creation.info,
         .external = creation.external,
         .producer = {},
@@ -447,6 +633,7 @@ void FrameGraph::Reset()
     nodes_.clear();
     executionOrder_.clear();
     executionBatches_.clear();
+    resourceStates_.clear();
     graphicsSubmissionWaits_.clear();
     if (builder_ != nullptr) builder_->Reset();
 }
@@ -479,8 +666,28 @@ void FrameGraph::Compile()
 
     executionOrder_.clear();
     executionBatches_.clear();
+    resourceStates_.clear();
     std::vector<std::uint32_t> indegrees(nodes_.size(), 0);
     std::size_t enabledNodeCount = 0;
+
+    const auto addEdge = [this, &indegrees](FrameGraphNodeHandle parentHandle,
+                                             FrameGraphNodeHandle childHandle) {
+        if (!parentHandle.IsValid() || !childHandle.IsValid() ||
+            parentHandle == childHandle) {
+            return;
+        }
+        FrameGraphNode* parent = AccessNode(parentHandle);
+        const FrameGraphNode* child = AccessNode(childHandle);
+        if (parent == nullptr || child == nullptr ||
+            !parent->enabled || !child->enabled) {
+            return;
+        }
+        if (std::find(parent->edges.begin(), parent->edges.end(), childHandle) ==
+            parent->edges.end()) {
+            parent->edges.push_back(childHandle);
+            ++indegrees[childHandle.handle];
+        }
+    };
 
     for (FrameGraphNodeHandle handle : nodes_) {
         FrameGraphNode* node = AccessNode(handle);
@@ -489,20 +696,11 @@ void FrameGraph::Compile()
         node->referenceCount = 0;
         if (node->enabled) {
             ++enabledNodeCount;
-            if (node->queue != Velos::RHI::QueueType::Graphics) {
-                const auto usesAttachment = [this](FrameGraphResourceHandle handle) {
-                    const FrameGraphResource* resource = AccessResource(handle);
-                    return resource != nullptr &&
-                           resource->type == FrameGraphResourceType::Attachment;
-                };
-                if (std::any_of(node->inputs.begin(), node->inputs.end(),
-                                usesAttachment) ||
-                    std::any_of(node->outputs.begin(), node->outputs.end(),
-                                usesAttachment)) {
-                    throw std::logic_error(
-                        "Non-graphics frame-graph pass '" + node->name +
-                        "' cannot use render attachments");
-                }
+            for (FrameGraphResourceHandle outputHandle : node->outputs) {
+                FrameGraphResource* output = AccessResource(outputHandle);
+                output->access = ResolveAccess(output->access, output->type,
+                                               output->info, false, node->queue);
+                ValidateAccess(*output, true, node->queue, node->name);
             }
         }
     }
@@ -510,6 +708,21 @@ void FrameGraph::Compile()
         FrameGraphResource* resource = AccessResource({ index });
         if (resource == nullptr) break;
         resource->referenceCount = 0;
+    }
+
+    struct HazardState {
+        FrameGraphNodeHandle lastWriter{};
+        std::vector<FrameGraphNodeHandle> readers;
+    };
+    std::vector<HazardState> hazards(builder_->resources_.size());
+    for (FrameGraphNodeHandle producerHandle : nodes_) {
+        const FrameGraphNode* producer = AccessNode(producerHandle);
+        if (!producer->enabled) continue;
+        for (FrameGraphResourceHandle outputHandle : producer->outputs) {
+            const FrameGraphResource* output = AccessResource(outputHandle);
+            if (output->type == FrameGraphResourceType::Reference) continue;
+            hazards[outputHandle.handle].lastWriter = producerHandle;
+        }
     }
 
     for (FrameGraphNodeHandle childHandle : nodes_) {
@@ -526,6 +739,9 @@ void FrameGraph::Compile()
                                            "' has no producer");
                 }
                 input->outputHandle = inputHandle;
+                input->access = ResolveAccess(input->access, input->type,
+                                              input->info, true, child->queue);
+                ValidateAccess(*input, false, child->queue, child->name);
                 continue;
             }
             if (output->producer == childHandle) {
@@ -555,12 +771,31 @@ void FrameGraph::Compile()
             input->outputHandle = output->outputHandle;
             input->info = output->info;
             input->external = output->external;
+            input->access = ResolveAccess(input->access, input->type,
+                                          input->info, true, child->queue);
+            ValidateAccess(*input, false, child->queue, child->name);
             ++output->referenceCount;
 
-            if (std::find(parent->edges.begin(), parent->edges.end(), childHandle) ==
-                parent->edges.end()) {
-                parent->edges.push_back(childHandle);
-                ++indegrees[childHandle.handle];
+            if (input->type == FrameGraphResourceType::Reference) {
+                addEdge(output->producer, childHandle);
+                continue;
+            }
+
+            HazardState& hazard = hazards[output->outputHandle.handle];
+            if (AccessReads(input->access)) {
+                addEdge(hazard.lastWriter, childHandle);
+            }
+            if (AccessWrites(input->access)) {
+                addEdge(hazard.lastWriter, childHandle);
+                for (FrameGraphNodeHandle reader : hazard.readers) {
+                    addEdge(reader, childHandle);
+                }
+                hazard.readers.clear();
+                hazard.lastWriter = childHandle;
+            } else if (AccessReads(input->access) &&
+                       std::find(hazard.readers.begin(), hazard.readers.end(),
+                                 childHandle) == hazard.readers.end()) {
+                hazard.readers.push_back(childHandle);
             }
         }
     }
@@ -594,6 +829,7 @@ void FrameGraph::Compile()
             builder_->AllocateResource(*resource);
         }
     }
+    resourceStates_.assign(builder_->resources_.size(), {});
 
     std::vector<std::size_t> nodeBatches(
         nodes_.size(), std::numeric_limits<std::size_t>::max());
@@ -681,7 +917,8 @@ void FrameGraph::RecordBatch(
             throw std::logic_error("No render-pass implementation registered for '" +
                                    node->name + "'");
         }
-        node->graphRenderPass->PreRender(commandList, scene);
+
+        const auto resourceSetupStart = CpuClock::now();
 
         Velos::RHI::ColorAttachmentDesc colorAttachment{};
         Velos::RHI::DepthAttachmentDesc depthAttachment{};
@@ -690,26 +927,110 @@ void FrameGraph::RecordBatch(
         std::uint32_t renderWidth = 0;
         std::uint32_t renderHeight = 0;
 
-        const auto transition = [&](const FrameGraphTextureInfo& texture,
-                                    Velos::RHI::ImageLayout layout) {
-            if (!texture.handle.IsValid()) {
+        std::vector<Velos::RHI::BufferBarrier> bufferBarriers;
+        std::vector<Velos::RHI::ImageBarrier> imageBarriers;
+        bufferBarriers.reserve(node->inputs.size() + node->outputs.size());
+        imageBarriers.reserve(node->inputs.size() + node->outputs.size());
+
+        const auto transition = [&](const FrameGraphResource& use,
+                                    const FrameGraphResource& resource) {
+            if (!resource.outputHandle.IsValid() ||
+                resource.outputHandle.handle >= resourceStates_.size()) {
+                throw std::logic_error("Resource '" + resource.name +
+                                       "' has no compiled state slot");
+            }
+            TrackedResourceState& tracked =
+                resourceStates_[resource.outputHandle.handle];
+            const Velos::RHI::ResourceState desiredState =
+                ResourceStateFor(use.access);
+
+            if (const auto* buffer = std::get_if<FrameGraphBufferInfo>(
+                    &resource.info)) {
+                if (!buffer->handle.IsValid()) {
+                    throw std::logic_error("Pass '" + node->name +
+                                           "' references an invalid buffer");
+                }
+                if (tracked.physicalHandle != buffer->handle.id || tracked.image) {
+                    tracked = {};
+                    tracked.physicalHandle = buffer->handle.id;
+                }
+
+                const bool sameQueue = tracked.initialized &&
+                                       tracked.queue == node->queue;
+                if (sameQueue &&
+                    (tracked.access != use.access ||
+                     AccessWrites(tracked.access) || AccessWrites(use.access))) {
+                    bufferBarriers.push_back({
+                        .buffer = buffer->handle,
+                        .oldState = ResourceStateFor(tracked.access),
+                        .newState = desiredState,
+                        .sourceQueue = tracked.queue,
+                        .destinationQueue = node->queue,
+                    });
+                }
+                tracked.access = use.access;
+                tracked.queue = node->queue;
+                tracked.image = false;
+                tracked.initialized = true;
+                return;
+            }
+
+            const auto* texture = std::get_if<FrameGraphTextureInfo>(
+                &resource.info);
+            if (texture == nullptr || !texture->handle.IsValid()) {
                 throw std::logic_error("Pass '" + node->name +
                                        "' references an invalid image");
             }
-            const Velos::RHI::ImageLayout oldLayout =
-                builder_->Device().GetImageLayout(texture.handle, 0);
-            if (oldLayout != layout) {
-                commandList.Barrier({
-                    .image = texture.handle,
-                    .oldLayout = oldLayout,
-                    .newLayout = layout,
-                    .aspect = ImageAspectFor(texture.format),
+            if (tracked.physicalHandle != texture->handle.id || !tracked.image) {
+                tracked = {};
+                tracked.physicalHandle = texture->handle.id;
+                tracked.image = true;
+            }
+
+            const Velos::RHI::ImageLayout actualLayout =
+                builder_->Device().GetImageLayout(texture->handle, 0);
+            if (actualLayout == Velos::RHI::ImageLayout::Undefined) {
+                tracked.initialized = false;
+                tracked.access = FrameGraphAccess::None;
+            }
+            tracked.layout = actualLayout;
+
+            const Velos::RHI::ImageLayout desiredLayout =
+                ImageLayoutFor(use.access);
+            if (desiredLayout == Velos::RHI::ImageLayout::Undefined) {
+                throw std::logic_error("Image resource '" + resource.name +
+                                       "' has a buffer-only access");
+            }
+
+            const bool sameQueue = tracked.initialized &&
+                                   tracked.queue == node->queue;
+            const bool layoutChange = actualLayout != desiredLayout;
+            const bool memoryHazard = sameQueue &&
+                (tracked.access != use.access ||
+                 AccessWrites(tracked.access) || AccessWrites(use.access));
+            if (layoutChange || memoryHazard) {
+                imageBarriers.push_back({
+                    .image = texture->handle,
+                    .oldLayout = actualLayout,
+                    .newLayout = desiredLayout,
+                    .oldState = sameQueue
+                        ? ResourceStateFor(tracked.access)
+                        : Velos::RHI::ResourceState::Undefined,
+                    .newState = desiredState,
+                    .useExplicitStates = true,
+                    .aspect = ImageAspectFor(texture->format),
+                    .sourceQueue = sameQueue ? tracked.queue : node->queue,
+                    .destinationQueue = node->queue,
                 });
             }
+            tracked.access = use.access;
+            tracked.layout = desiredLayout;
+            tracked.queue = node->queue;
+            tracked.image = true;
+            tracked.initialized = true;
         };
 
-        const auto addAttachment = [&](const FrameGraphResource& use,
-                                       const FrameGraphResource& resource) {
+        const auto addAttachment = [&](const FrameGraphResource& resource) {
             const auto* texture = std::get_if<FrameGraphTextureInfo>(&resource.info);
             if (texture == nullptr || !texture->view.IsValid()) {
                 throw std::logic_error("Attachment '" + resource.name +
@@ -728,7 +1049,6 @@ void FrameGraph::RecordBatch(
                     throw std::logic_error("Pass '" + node->name +
                                            "' has multiple depth attachments");
                 }
-                transition(*texture, Velos::RHI::ImageLayout::DepthAttachment);
                 depthAttachment.view = texture->view;
                 depthAttachment.loadOp = ToLoadOp(texture->loadOp);
                 depthAttachment.storeOp = Velos::RHI::StoreOp::Store;
@@ -740,14 +1060,12 @@ void FrameGraph::RecordBatch(
                     throw std::logic_error(
                         "Velos currently supports one color attachment per pass");
                 }
-                transition(*texture, Velos::RHI::ImageLayout::ColorAttachment);
                 colorAttachment.view = texture->view;
                 colorAttachment.loadOp = ToLoadOp(texture->loadOp);
                 colorAttachment.storeOp = Velos::RHI::StoreOp::Store;
                 colorAttachment.clearValue = texture->clearColor;
                 hasColorAttachment = true;
             }
-            (void)use;
         };
 
         for (FrameGraphResourceHandle inputHandle : node->inputs) {
@@ -756,25 +1074,35 @@ void FrameGraph::RecordBatch(
                 ? AccessResource(input->outputHandle)
                 : input;
             if (resource == nullptr) continue;
-
-            if (input->type == FrameGraphResourceType::Texture) {
-                if (const auto* texture =
-                        std::get_if<FrameGraphTextureInfo>(&resource->info)) {
-                    transition(*texture, Velos::RHI::ImageLayout::ShaderReadOnly);
-                }
-            } else if (input->type == FrameGraphResourceType::Attachment) {
-                addAttachment(*input, *resource);
+            if (input->type != FrameGraphResourceType::Reference) {
+                transition(*input, *resource);
+            }
+            if (input->type == FrameGraphResourceType::Attachment) {
+                addAttachment(*resource);
             }
         }
 
         for (FrameGraphResourceHandle outputHandle : node->outputs) {
             const FrameGraphResource* output = AccessResource(outputHandle);
+            if (output->type != FrameGraphResourceType::Reference) {
+                transition(*output, *output);
+            }
             if (output->type == FrameGraphResourceType::Attachment) {
-                addAttachment(*output, *output);
+                addAttachment(*output);
             }
         }
 
+        if (!bufferBarriers.empty() || !imageBarriers.empty()) {
+            commandList.PipelineBarrier(bufferBarriers, imageBarriers);
+        }
+		cpuTimings_.resourceSetupMs += ElapsedMilliseconds(resourceSetupStart);
+
+		const auto preRenderStart = CpuClock::now();
+        node->graphRenderPass->PreRender(commandList, scene);
+		cpuTimings_.preRenderMs += ElapsedMilliseconds(preRenderStart);
+
         const bool hasAttachments = hasColorAttachment || hasDepthAttachment;
+		const auto renderingSetupStart = CpuClock::now();
         if (hasAttachments) {
             commandList.SetViewport({
                 .width = static_cast<float>(renderWidth),
@@ -788,14 +1116,22 @@ void FrameGraph::RecordBatch(
                 .depthAttachment = hasDepthAttachment ? &depthAttachment : nullptr,
             });
         }
+		cpuTimings_.renderingSetupMs += ElapsedMilliseconds(renderingSetupStart);
 
+		const auto drawRecordStart = CpuClock::now();
         try {
             node->graphRenderPass->Render(commandList, scene);
         } catch (...) {
+			cpuTimings_.drawRecordMs += ElapsedMilliseconds(drawRecordStart);
             if (hasAttachments) commandList.EndRendering();
             throw;
         }
-        if (hasAttachments) commandList.EndRendering();
+		cpuTimings_.drawRecordMs += ElapsedMilliseconds(drawRecordStart);
+		if (hasAttachments) {
+			const auto renderingEndStart = CpuClock::now();
+			commandList.EndRendering();
+			cpuTimings_.renderingSetupMs += ElapsedMilliseconds(renderingEndStart);
+		}
     }
 }
 
@@ -804,6 +1140,8 @@ void FrameGraph::Render(const RenderScene& scene)
     if (builder_ == nullptr) {
         throw std::logic_error("FrameGraph is not initialized");
     }
+	cpuTimings_ = {};
+	auto schedulingStart = CpuClock::now();
 
     std::vector<Velos::RHI::TimelineSemaphorePoint> batchSignals(
         executionBatches_.size());
@@ -825,7 +1163,20 @@ void FrameGraph::Render(const RenderScene& scene)
          batchIndex < executionBatches_.size(); ++batchIndex) {
         const FrameGraphQueueBatch& batch = executionBatches_[batchIndex];
         std::vector<Velos::RHI::TimelineSemaphorePoint> waits;
-        waits.reserve(batch.dependencies.size());
+        waits.reserve(batch.dependencies.size() + batch.nodes.size());
+        const auto appendWait = [&waits](
+            const Velos::RHI::TimelineSemaphorePoint& point) {
+            const auto found = std::find_if(
+                waits.begin(), waits.end(),
+                [&point](const Velos::RHI::TimelineSemaphorePoint& wait) {
+                    return wait.semaphore.id == point.semaphore.id;
+                });
+            if (found == waits.end()) {
+                waits.push_back(point);
+            } else {
+                found->value = std::max(found->value, point.value);
+            }
+        };
         for (std::size_t dependency : batch.dependencies) {
             if (dependency >= batchIndex ||
                 !batchSignals[dependency].semaphore.IsValid()) {
@@ -833,16 +1184,66 @@ void FrameGraph::Render(const RenderScene& scene)
                     "Frame-graph queue dependency was not submitted");
             }
             if (executionBatches_[dependency].queue != batch.queue) {
-                waits.push_back(batchSignals[dependency]);
+                appendWait(batchSignals[dependency]);
             }
         }
 
+        const auto visitBatchResources = [this, &batch](auto&& visitor) {
+            for (FrameGraphNodeHandle nodeHandle : batch.nodes) {
+                const FrameGraphNode* node = AccessNode(nodeHandle);
+                const auto visitUse = [this, &visitor](
+                    FrameGraphResourceHandle useHandle, bool input) {
+                    const FrameGraphResource* use = AccessResource(useHandle);
+                    if (use == nullptr ||
+                        use->type == FrameGraphResourceType::Reference) {
+                        return;
+                    }
+                    const FrameGraphResource* resource = input &&
+                        use->outputHandle.IsValid()
+                            ? AccessResource(use->outputHandle)
+                            : use;
+                    if (resource == nullptr ||
+                        !resource->outputHandle.IsValid() ||
+                        resource->outputHandle.handle >= resourceStates_.size()) {
+                        throw std::logic_error(
+                            "Frame-graph batch references an uncompiled resource");
+                    }
+                    visitor(resource->outputHandle.handle);
+                };
+                for (FrameGraphResourceHandle input : node->inputs) {
+                    visitUse(input, true);
+                }
+                for (FrameGraphResourceHandle output : node->outputs) {
+                    visitUse(output, false);
+                }
+            }
+        };
+
+        visitBatchResources([this, &batch, &appendWait](std::uint32_t stateIndex) {
+            const TrackedResourceState& state = resourceStates_[stateIndex];
+            if (state.initialized && state.queue != batch.queue &&
+                state.completion.semaphore.IsValid()) {
+                appendWait(state.completion);
+            }
+        });
+
         QueueTimelineState& timeline = TimelineFor(batch.queue);
+		cpuTimings_.schedulingMs += ElapsedMilliseconds(schedulingStart);
+
+		const auto acquireStart = CpuClock::now();
         Velos::RHI::ICommandList& queueCommands =
             builder_->Device().AcquireCommandList(batch.queue);
+		cpuTimings_.acquireCommandListMs += ElapsedMilliseconds(acquireStart);
+
+		const auto commandBeginStart = CpuClock::now();
         queueCommands.Begin();
+		cpuTimings_.commandBeginMs += ElapsedMilliseconds(commandBeginStart);
         RecordBatch(batch, queueCommands, scene);
+
+		const auto commandEndStart = CpuClock::now();
         queueCommands.End();
+		cpuTimings_.commandEndMs += ElapsedMilliseconds(commandEndStart);
+		schedulingStart = CpuClock::now();
 
         if (timeline.nextSignalValue ==
             std::numeric_limits<std::uint64_t>::max()) {
@@ -851,11 +1252,19 @@ void FrameGraph::Render(const RenderScene& scene)
         const Velos::RHI::TimelineSemaphorePoint signal{
             timeline.semaphore, timeline.nextSignalValue++ };
         const Velos::RHI::TimelineSemaphorePoint signals[] = { signal };
+		cpuTimings_.schedulingMs += ElapsedMilliseconds(schedulingStart);
+
+		const auto submitStart = CpuClock::now();
         builder_->Device().Submit(batch.queue, queueCommands, {
             .waits = waits,
             .signals = signals,
         });
+		cpuTimings_.queueSubmitMs += ElapsedMilliseconds(submitStart);
+		schedulingStart = CpuClock::now();
         batchSignals[batchIndex] = signal;
+        visitBatchResources([this, &signal](std::uint32_t stateIndex) {
+            resourceStates_[stateIndex].completion = signal;
+        });
     }
 
     for (std::size_t batchIndex = 0;
@@ -865,6 +1274,7 @@ void FrameGraph::Render(const RenderScene& scene)
             appendGraphicsWait(batchSignals[batchIndex]);
         }
     }
+	cpuTimings_.schedulingMs += ElapsedMilliseconds(schedulingStart);
 }
 
 void FrameGraph::OnResize(
@@ -875,6 +1285,7 @@ void FrameGraph::OnResize(
         throw std::invalid_argument("FrameGraph resized with a different device");
     }
     builder_->RecreateResizableResources(width, height);
+    resourceStates_.assign(builder_->resources_.size(), {});
 
     for (FrameGraphNodeHandle handle : executionOrder_) {
         FrameGraphNode* node = AccessNode(handle);

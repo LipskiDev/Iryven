@@ -70,6 +70,34 @@ enum class FrameGraphResourceType {
     Reference,
 };
 
+// Describes how a pass uses a resource. Auto preserves the legacy conventions
+// (texture input = sampled read, attachment output = attachment write, etc.).
+enum class FrameGraphAccess {
+    Auto,
+    None,
+
+    VertexBufferRead,
+    IndexBufferRead,
+    UniformRead,
+    IndirectRead,
+
+    ShaderSampledRead,
+    ShaderStorageRead,
+    ShaderStorageWrite,
+    ShaderStorageReadWrite,
+
+    ColorAttachmentRead,
+    ColorAttachmentWrite,
+    ColorAttachmentReadWrite,
+    DepthStencilRead,
+    DepthStencilWrite,
+    DepthStencilReadWrite,
+
+    TransferRead,
+    TransferWrite,
+    Present,
+};
+
 struct FrameGraphBufferInfo {
     std::size_t size = 0;
     Velos::RHI::BufferUsage usage{};
@@ -98,6 +126,7 @@ using FrameGraphResourceInfo =
 
 struct FrameGraphResource {
     FrameGraphResourceType type = FrameGraphResourceType::Texture;
+    FrameGraphAccess access = FrameGraphAccess::Auto;
     FrameGraphResourceInfo info{};
     bool external = false;
     FrameGraphNodeHandle producer{};
@@ -108,6 +137,7 @@ struct FrameGraphResource {
 
 struct FrameGraphResourceInputCreation {
     FrameGraphResourceType type = FrameGraphResourceType::Texture;
+    FrameGraphAccess access = FrameGraphAccess::Auto;
     FrameGraphResourceInfo info{};
     bool external = false;
     std::string name;
@@ -115,6 +145,7 @@ struct FrameGraphResourceInputCreation {
 
 struct FrameGraphResourceOutputCreation {
     FrameGraphResourceType type = FrameGraphResourceType::Texture;
+    FrameGraphAccess access = FrameGraphAccess::Auto;
     FrameGraphResourceInfo info{};
     bool external = false;
     std::string name;
@@ -205,6 +236,18 @@ private:
     std::unordered_map<std::string, FrameGraphRenderPass*> renderPassMap_;
 };
 
+struct FrameGraphCpuTimings {
+    float schedulingMs = 0.0f;
+    float acquireCommandListMs = 0.0f;
+    float commandBeginMs = 0.0f;
+    float resourceSetupMs = 0.0f;
+    float preRenderMs = 0.0f;
+    float renderingSetupMs = 0.0f;
+    float drawRecordMs = 0.0f;
+    float commandEndMs = 0.0f;
+    float queueSubmitMs = 0.0f;
+};
+
 class FrameGraph {
 public:
     void Init(FrameGraphBuilder& builder);
@@ -249,7 +292,22 @@ public:
         return graphicsSubmissionWaits_;
     }
 
+    [[nodiscard]] const FrameGraphCpuTimings& GetCpuTimings() const noexcept
+    {
+        return cpuTimings_;
+    }
+
 private:
+    struct TrackedResourceState {
+        FrameGraphAccess access = FrameGraphAccess::None;
+        Velos::RHI::ImageLayout layout = Velos::RHI::ImageLayout::Undefined;
+        Velos::RHI::QueueType queue = Velos::RHI::QueueType::Graphics;
+        Velos::RHI::TimelineSemaphorePoint completion{};
+        std::uint32_t physicalHandle = Velos::RHI::kInvalidHandle;
+        bool image = false;
+        bool initialized = false;
+    };
+
     struct QueueTimelineState {
         Velos::RHI::QueueType queue = Velos::RHI::QueueType::Graphics;
         Velos::RHI::SemaphoreHandle semaphore{};
@@ -265,8 +323,10 @@ private:
     std::vector<FrameGraphNodeHandle> nodes_;
     std::vector<FrameGraphNodeHandle> executionOrder_;
     std::vector<FrameGraphQueueBatch> executionBatches_;
+    std::vector<TrackedResourceState> resourceStates_;
     std::vector<QueueTimelineState> queueTimelines_;
     std::vector<Velos::RHI::TimelineSemaphorePoint> graphicsSubmissionWaits_;
+    FrameGraphCpuTimings cpuTimings_{};
     FrameGraphBuilder* builder_ = nullptr; // Non-owning.
 };
 

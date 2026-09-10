@@ -235,23 +235,15 @@ int main()
             .name = "draw",
             .inputs = {{
                 .type = Iryven::FrameGraphResourceType::Buffer,
+                .access = Iryven::FrameGraphAccess::ShaderStorageReadWrite,
                 .name = "simulation",
-            }},
-            .outputs = {{
-                .type = Iryven::FrameGraphResourceType::Buffer,
-                .info = Iryven::FrameGraphBufferInfo{
-                    .size = 256,
-                    .usage = Velos::RHI::BufferUsage::Storage,
-                    .concurrentQueues = true,
-                },
-                .external = true,
-                .name = "lighting",
             }},
         });
         graph.AddNode({
             .name = "simulate",
             .outputs = {{
                 .type = Iryven::FrameGraphResourceType::Buffer,
+                .access = Iryven::FrameGraphAccess::ShaderStorageWrite,
                 .info = Iryven::FrameGraphBufferInfo{
                     .size = 256,
                     .usage = Velos::RHI::BufferUsage::Storage,
@@ -266,7 +258,8 @@ int main()
             .name = "post",
             .inputs = {{
                 .type = Iryven::FrameGraphResourceType::Buffer,
-                .name = "lighting",
+                .access = Iryven::FrameGraphAccess::ShaderStorageRead,
+                .name = "simulation",
             }},
             .queue = Velos::RHI::QueueType::Compute,
         });
@@ -338,36 +331,52 @@ int main()
         graph.Init(builder);
         graph.AddNode({
             .name = "draw",
-            .inputs = {{
-                .type = Iryven::FrameGraphResourceType::Buffer,
-                .name = "simulation",
-            }},
-            .outputs = {{
-                .type = Iryven::FrameGraphResourceType::Buffer,
-                .info = Iryven::FrameGraphBufferInfo{
-                    .size = 256,
-                    .usage = Velos::RHI::BufferUsage::Storage,
+            .inputs = {
+                {
+                    .type = Iryven::FrameGraphResourceType::Buffer,
+                    .access = Iryven::FrameGraphAccess::ShaderStorageReadWrite,
+                    .name = "simulation",
                 },
-                .name = "lighting",
-            }},
+                {
+                    .type = Iryven::FrameGraphResourceType::Texture,
+                    .access = Iryven::FrameGraphAccess::ShaderSampledRead,
+                    .name = "simulation-image",
+                },
+            },
         });
         graph.AddNode({
             .name = "simulate",
-            .outputs = {{
-                .type = Iryven::FrameGraphResourceType::Buffer,
-                .info = Iryven::FrameGraphBufferInfo{
-                    .size = 256,
-                    .usage = Velos::RHI::BufferUsage::Storage,
+            .outputs = {
+                {
+                    .type = Iryven::FrameGraphResourceType::Buffer,
+                    .access = Iryven::FrameGraphAccess::ShaderStorageWrite,
+                    .info = Iryven::FrameGraphBufferInfo{
+                        .size = 256,
+                        .usage = Velos::RHI::BufferUsage::Storage,
+                    },
+                    .name = "simulation",
                 },
-                .name = "simulation",
-            }},
+                {
+                    .type = Iryven::FrameGraphResourceType::Texture,
+                    .access = Iryven::FrameGraphAccess::ShaderStorageWrite,
+                    .info = Iryven::FrameGraphTextureInfo{
+                        .width = 16,
+                        .height = 16,
+                        .format = Velos::RHI::Format::RGBA8_UNORM,
+                        .usage = Velos::RHI::ImageUsage::Storage |
+                                 Velos::RHI::ImageUsage::Sampled,
+                    },
+                    .name = "simulation-image",
+                },
+            },
             .queue = Velos::RHI::QueueType::Compute,
         });
         graph.AddNode({
             .name = "post",
             .inputs = {{
                 .type = Iryven::FrameGraphResourceType::Buffer,
-                .name = "lighting",
+                .access = Iryven::FrameGraphAccess::ShaderStorageRead,
+                .name = "simulation",
             }},
             .queue = Velos::RHI::QueueType::Compute,
         });
@@ -380,10 +389,22 @@ int main()
         graph.BeginFrame();
         graph.Render({});
         assert(graph.GraphicsSubmissionWaits().size() == 1);
-        device->WaitIdle();
         assert(computeRenderCount == 1);
         assert(graphicsRenderCount == 1);
         assert(postRenderCount == 1);
+        const auto* simulationImage = graph.GetResource("simulation-image");
+        assert(simulationImage != nullptr);
+        assert(device->GetImageLayout(
+            std::get<Iryven::FrameGraphTextureInfo>(simulationImage->info).handle,
+            0) == Velos::RHI::ImageLayout::ShaderReadOnly);
+
+        graph.BeginFrame();
+        graph.Render({});
+        assert(graph.GraphicsSubmissionWaits().size() == 1);
+        device->WaitIdle();
+        assert(computeRenderCount == 2);
+        assert(graphicsRenderCount == 2);
+        assert(postRenderCount == 2);
 
         graph.Shutdown();
         builder.Shutdown();

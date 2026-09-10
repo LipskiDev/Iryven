@@ -83,6 +83,22 @@ vec3 FresnelSchlick(float viewDotHalf, vec3 reflectanceAtNormal) {
         pow(1.0 - clamp(viewDotHalf, 0.0, 1.0), 5.0);
 }
 
+float CleanRoughness(vec3 worldNormal, float perceptalRoughness) {
+    vec3 ddxNormal = dFdx(worldNormal);
+    vec3 ddyNormal = dFdy(worldNormal);
+
+    float pixelVariance = dot(ddxNormal, ddxNormal) + dot(ddyNormal, ddyNormal);
+
+    const float varianceThreshold = 0.25;
+
+    float alpha = perceptalRoughness * perceptalRoughness;
+
+    float kernelAlpha = min(varianceThreshold, pixelVariance);
+    float cleanedAlpha = sqrt(alpha + kernelAlpha);
+
+    return cleanedAlpha;
+}
+
 vec3 EvaluateDirectLighting(
     vec3 normal,
     vec3 viewDirection,
@@ -195,15 +211,19 @@ void main() {
         sampledMetallicRoughness.b, 0.0, 1.0);
     float roughness = clamp(material.metallicRoughnessNormal.y *
         sampledMetallicRoughness.g, 0.045, 1.0);
+
+    vec3 normal = EvaluateMaterialNormal(material);
+    float filteredRoughness = CleanRoughness(normal, roughness);
+
     float ambientOcclusion = (flags & 8u) != 0u
         ? mix(1.0, SampleBindlessTexture(material.textureIndices0.w).r,
             clamp(material.metallicRoughnessNormal.w, 0.0, 1.0))
         : 1.0;
-    vec3 normal = EvaluateMaterialNormal(material);
+    // normal = normalize(worldNormal);
     vec3 viewDirection = normalize(cameraPosition.xyz - worldPosition);
     vec3 lighting = EvaluateDirectLighting(
         normal, viewDirection, baseColor.rgb,
-        metallic, roughness, ambientOcclusion);
+        metallic, filteredRoughness, ambientOcclusion);
     vec3 sampledEmissive = (flags & 16u) != 0u
         ? SampleBindlessTexture(material.textureIndices1.x).rgb
         : vec3(1.0);

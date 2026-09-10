@@ -20,6 +20,13 @@
 namespace Iryven {
     class ImGuiRenderer;
 
+	struct RendererCpuTimings {
+		FrameGraphCpuTimings frameGraph{};
+		float uploadLightsMs = 0.0f;
+		float uploadMaterialsMs = 0.0f;
+		float uploadFrameDataMs = 0.0f;
+	};
+
 	constexpr uint32_t k_MaxLightSources = 128;
 	constexpr uint32_t k_FramesInFlight = 2;
 
@@ -32,6 +39,15 @@ namespace Iryven {
 		Renderer& operator=(const Renderer&) = delete;
 
 		[[nodiscard]] bool BeginFrame();
+		[[nodiscard]] float GetFrameFenceWaitMs() const noexcept {
+			return frame_.frameFenceWaitMs;
+		}
+		[[nodiscard]] float GetAcquireImageMs() const noexcept {
+			return frame_.acquireImageMs;
+		}
+		[[nodiscard]] const RendererCpuTimings& GetCpuTimings() const noexcept {
+			return cpuTimings_;
+		}
 		void DrawScene(const RenderScene& renderScene) override;
         void InitializeImGui();
         void ShutdownImGui();
@@ -99,6 +115,25 @@ namespace Iryven {
 			Velos::RHI::BindingSetHandle bindingSet;
 		};
 
+		struct UploadBackedBuffer {
+			Velos::RHI::BufferHandle gpuBuffer;
+			Velos::RHI::BufferHandle uploadBuffer;
+			Velos::RHI::ResourceState state = Velos::RHI::ResourceState::Undefined;
+		};
+
+		[[nodiscard]] UploadBackedBuffer CreateUploadBackedBuffer(
+			std::uint64_t size,
+			Velos::RHI::BufferUsage usage,
+			const char* gpuDebugName,
+			const char* uploadDebugName);
+		void DestroyUploadBackedBuffer(UploadBackedBuffer& buffer);
+		void UploadBuffer(
+			Velos::RHI::ICommandList& commands,
+			UploadBackedBuffer& buffer,
+			const void* data,
+			std::uint64_t size,
+			Velos::RHI::ResourceState finalState);
+
 		[[nodiscard]] GpuMesh* ResolveOrCreateMesh(
 			const std::shared_ptr<const MeshData>& mesh);
 		[[nodiscard]] GpuModel* ResolveOrCreateModel(const ModelHandle& model);
@@ -120,6 +155,7 @@ namespace Iryven {
 		Velos::RHI::ImageViewHandle depthView_;
 		FrameGraphBuilder frameGraphBuilder_;
 		FrameGraph frameGraph_;
+		RendererCpuTimings cpuTimings_{};
 		std::unique_ptr<OpaquePass> opaquePass_;
 
 		std::unordered_map<const MeshData*, GpuMesh> meshes_;
@@ -136,13 +172,13 @@ namespace Iryven {
 		Velos::RHI::GeneratedPipelineLayout textGeneratedLayout_;
 		Velos::RHI::BindingLayoutHandle fontBindingLayout_;
 		Velos::RHI::BindingPoolHandle fontBindingPool_;
-		std::array<std::vector<Velos::RHI::BufferHandle>, k_FramesInFlight>
+		std::array<std::vector<UploadBackedBuffer>, k_FramesInFlight>
 			textVertexBuffers_;
 
 		struct FrameLightingResource {
-			Velos::RHI::BufferHandle lightBuffer;
-			Velos::RHI::BufferHandle frameDataBuffer;
-			Velos::RHI::BufferHandle materialBuffer;
+			UploadBackedBuffer lightBuffer;
+			UploadBackedBuffer frameDataBuffer;
+			UploadBackedBuffer materialBuffer;
 			Velos::RHI::BindingSetHandle lightBindingSet;
 		};
 

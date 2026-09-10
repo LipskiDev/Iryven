@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -20,6 +21,14 @@
 #include <rhi/upload_context.h>
 
 namespace {
+
+using CpuClock = std::chrono::steady_clock;
+
+[[nodiscard]] float ElapsedMilliseconds(CpuClock::time_point start)
+{
+	return std::chrono::duration<float, std::milli>(CpuClock::now() - start)
+		.count();
+}
 
 struct TextVertex {
 	glm::vec2 position;
@@ -97,12 +106,21 @@ namespace Iryven {
 		void PreRender(
 			Velos::RHI::ICommandList& commands, const RenderScene& scene) override
 		{
+			const auto lightsStart = CpuClock::now();
 			renderer_.UploadLights(commands, scene.lights);
+			renderer_.cpuTimings_.uploadLightsMs += ElapsedMilliseconds(lightsStart);
+
+			const auto materialsStart = CpuClock::now();
 			renderer_.UploadMaterials(commands, scene.objects);
+			renderer_.cpuTimings_.uploadMaterialsMs +=
+				ElapsedMilliseconds(materialsStart);
 			hasCamera_ = scene.camera.has_value();
 			if (hasCamera_) {
 				frameData_ = renderer_.BuildFrameData(*scene.camera);
+				const auto frameDataStart = CpuClock::now();
 				renderer_.UploadFrameData(commands, frameData_);
+				renderer_.cpuTimings_.uploadFrameDataMs +=
+					ElapsedMilliseconds(frameDataStart);
 			}
 		}
 
@@ -132,7 +150,7 @@ namespace Iryven {
 	{
 		device_.reset(Velos::RHI::CreateDevice({
 			.graphicsAPI = Velos::RHI::GraphicsAPI::Vulkan,
-			.enableValidation = true,
+			.enableValidation = false,
 			.applicationName = window_.GetTitle().c_str(),
 		}));
 
@@ -234,7 +252,9 @@ namespace Iryven {
 			throw std::logic_error("Renderer::DrawScene called outside an active frame");
 		}
 
+		cpuTimings_ = {};
 		frameGraph_.Render(renderScene);
+		cpuTimings_.frameGraph = frameGraph_.GetCpuTimings();
 	}
 
 	bool Renderer::BeginFrame()
@@ -275,8 +295,8 @@ namespace Iryven {
 		CollectUnusedFonts();
 
 		auto& retiredTextBuffers = textVertexBuffers_.at(frame_.frameIndex);
-		for (const auto buffer : retiredTextBuffers) {
-			device_->DestroyBuffer(buffer);
+		for (auto& buffer : retiredTextBuffers) {
+			DestroyUploadBackedBuffer(buffer);
 		}
 		retiredTextBuffers.clear();
 
@@ -348,6 +368,74 @@ namespace Iryven {
 		commands.BindIndexBuffer(mesh ? mesh->indexBuffer : model->indexBuffer, Velos::RHI::IndexType::U32);
 		if (model) commands.DrawIndexed(object.indexCount, object.firstIndex, object.vertexOffset);
 		else commands.DrawIndexed(mesh->indexCount);
+	}
+
+	Renderer::UploadBackedBuffer Renderer::CreateUploadBackedBuffer(
+		std::uint64_t size,
+		Velos::RHI::BufferUsage usage,
+		const char* gpuDebugName,
+		const char* uploadDebugName)
+	{
+		UploadBackedBuffer buffer;
+		buffer.gpuBuffer = device_->CreateBuffer({
+			.size = size,
+			.usage = usage | Velos::RHI::BufferUsage::TransferDst,
+			.memoryUsage = Velos::RHI::MemoryUsage::GPUOnly,
+			.debugName = gpuDebugName,
+		});
+		try {
+			buffer.uploadBuffer = device_->CreateBuffer({
+				.size = size,
+				.usage = Velos::RHI::BufferUsage::TransferSrc,
+				.memoryUsage = Velos::RHI::MemoryUsage::CPUToGPU,
+				.debugName = uploadDebugName,
+			});
+		} catch (...) {
+			device_->DestroyBuffer(buffer.gpuBuffer);
+			throw;
+		}
+		return buffer;
+	}
+
+	void Renderer::DestroyUploadBackedBuffer(UploadBackedBuffer& buffer)
+	{
+		if (buffer.uploadBuffer.IsValid()) {
+			device_->DestroyBuffer(buffer.uploadBuffer);
+		}
+		if (buffer.gpuBuffer.IsValid()) {
+			device_->DestroyBuffer(buffer.gpuBuffer);
+		}
+		buffer = {};
+	}
+
+	void Renderer::UploadBuffer(
+		Velos::RHI::ICommandList& commands,
+		UploadBackedBuffer& buffer,
+		const void* data,
+		std::uint64_t size,
+		Velos::RHI::ResourceState finalState)
+	{
+		commands.UpdateBuffer({
+			.buffer = buffer.uploadBuffer,
+			.offset = 0,
+			.data = data,
+			.size = size,
+		});
+		commands.Barrier({
+			.buffer = buffer.gpuBuffer,
+			.oldState = buffer.state,
+			.newState = Velos::RHI::ResourceState::TransferDst,
+		});
+		commands.CopyBuffer(
+			buffer.uploadBuffer,
+			buffer.gpuBuffer,
+			{ .srcOffset = 0, .dstOffset = 0, .size = size });
+		commands.Barrier({
+			.buffer = buffer.gpuBuffer,
+			.oldState = Velos::RHI::ResourceState::TransferDst,
+			.newState = finalState,
+		});
+		buffer.state = finalState;
 	}
 
 	void Renderer::DrawText(
@@ -422,18 +510,24 @@ namespace Iryven {
 		if (vertices.empty()) {
 			return;
 		}
-		const auto vertexBuffer = device_->CreateBuffer({
-			.size = vertices.size() * sizeof(TextVertex),
-			.usage = Velos::RHI::BufferUsage::Vertex,
-			.memoryUsage = Velos::RHI::MemoryUsage::CPUToGPU,
-			.initialData = vertices.data(),
-			.debugName = "Iryven text vertex buffer"
-		});
-		textVertexBuffers_.at(frame_.frameIndex).push_back(vertexBuffer);
+		const std::uint64_t vertexBufferSize = vertices.size() * sizeof(TextVertex);
+		auto vertexBuffer = CreateUploadBackedBuffer(
+			vertexBufferSize,
+			Velos::RHI::BufferUsage::Vertex,
+			"Iryven text vertex buffer",
+			"Iryven text vertex upload buffer");
+		UploadBuffer(
+			commands,
+			vertexBuffer,
+			vertices.data(),
+			vertexBufferSize,
+			Velos::RHI::ResourceState::VertexBuffer);
+		const Velos::RHI::BufferHandle gpuVertexBuffer = vertexBuffer.gpuBuffer;
+		textVertexBuffers_.at(frame_.frameIndex).push_back(std::move(vertexBuffer));
 
 		commands.BindPipeline(textPipeline_);
 		commands.SetBindings(textPipeline_, 0, gpuFont->bindingSet);
-		commands.BindVertexBuffer(0, vertexBuffer);
+		commands.BindVertexBuffer(0, gpuVertexBuffer);
 		commands.Draw(static_cast<Velos::u32>(vertices.size()));
 	}
 
@@ -468,12 +562,12 @@ namespace Iryven {
 			};
 		}
 
-		commands.UpdateBuffer({
-			.buffer = lightingFrames_.at(frame_.frameIndex).lightBuffer,
-			.offset = 0,
-			.data = &gpuLights,
-			.size = sizeof(gpuLights)
-		});
+		UploadBuffer(
+			commands,
+			lightingFrames_.at(frame_.frameIndex).lightBuffer,
+			&gpuLights,
+			sizeof(gpuLights),
+			Velos::RHI::ResourceState::UniformBuffer);
 	}
 
 	void Renderer::UploadFrameData(
@@ -491,12 +585,12 @@ namespace Iryven {
 			.viewProjection = frameData.viewProjection,
 			.cameraPosition = glm::vec4(frameData.cameraPosition, 1.0f)
 		};
-		commands.UpdateBuffer({
-			.buffer = lightingFrames_.at(frame_.frameIndex).frameDataBuffer,
-			.offset = 0,
-			.data = &gpuFrameData,
-			.size = sizeof(gpuFrameData)
-		});
+		UploadBuffer(
+			commands,
+			lightingFrames_.at(frame_.frameIndex).frameDataBuffer,
+			&gpuFrameData,
+			sizeof(gpuFrameData),
+			Velos::RHI::ResourceState::UniformBuffer);
 	}
 
 	void Renderer::UploadMaterials(
@@ -555,12 +649,12 @@ namespace Iryven {
 			});
 		}
 
-		commands.UpdateBuffer({
-			.buffer = lightingFrames_.at(frame_.frameIndex).materialBuffer,
-			.offset = 0,
-			.data = materials.data(),
-			.size = materials.size() * sizeof(GpuMaterial),
-		});
+		UploadBuffer(
+			commands,
+			lightingFrames_.at(frame_.frameIndex).materialBuffer,
+			materials.data(),
+			materials.size() * sizeof(GpuMaterial),
+			Velos::RHI::ResourceState::ShaderRead);
 	}
 
 	FrameData Renderer::BuildFrameData(const RenderCamera& camera) const
@@ -601,6 +695,7 @@ namespace Iryven {
 
 		commands.Barrier({
 			.image = frame_.backbufferImage,
+			.oldLayout = device_->GetImageLayout(frame_.backbufferImage, 0),
 			.newLayout = Velos::RHI::ImageLayout::Present,
 			.aspect = Velos::RHI::ImageAspect::Color,
 		});
@@ -623,6 +718,7 @@ namespace Iryven {
 		if (!frameActive_ || !imGui_) return;
 		auto& commands = device_->GetCommandList();
 		commands.Barrier({ .image = frame_.backbufferImage,
+			.oldLayout = device_->GetImageLayout(frame_.backbufferImage, 0),
 			.newLayout = Velos::RHI::ImageLayout::ColorAttachment });
 		const auto size = device_->GetSwapchainDimensions();
 		const Velos::RHI::ColorAttachmentDesc color{
@@ -726,7 +822,7 @@ namespace Iryven {
 			},
 			.topology = Velos::RHI::PrimitiveTopology::TriangleList,
 			.raster = {
-				.cullBackFaces = false,
+				.cullBackFaces = true,
 				.frontFaceCCW = true,
 				.wireframe = false,
 			},
@@ -879,9 +975,14 @@ namespace Iryven {
 	Renderer::GpuMesh* Renderer::ResolveOrCreateMesh(
 		const std::shared_ptr<const MeshData>& mesh)
 	{
-		if (!mesh || mesh->vertices.empty() || mesh->indices.empty()) {
+		if (!mesh) {
 			return nullptr;
 		}
+		if (const auto existing = meshes_.find(mesh.get()); existing != meshes_.end()) {
+			return &existing->second;
+		}
+		if (mesh->vertices.empty() || mesh->indices.empty()) return nullptr;
+
 		const std::size_t vertexCount = mesh->vertices.size();
 		if (mesh->indices.size() > std::numeric_limits<std::uint32_t>::max() ||
 			std::ranges::any_of(mesh->indices, [vertexCount](std::uint32_t index) {
@@ -890,27 +991,45 @@ namespace Iryven {
 			return nullptr;
 		}
 
-		if (const auto existing = meshes_.find(mesh.get()); existing != meshes_.end()) {
-			return &existing->second;
-		}
-
+		const std::size_t vertexBufferSize = mesh->vertices.size() * sizeof(Vertex);
+		const std::size_t indexBufferSize =
+			mesh->indices.size() * sizeof(std::uint32_t);
 		const auto vertexBuffer = device_->CreateBuffer({
-			.size = mesh->vertices.size() * sizeof(Vertex),
-			.usage = Velos::RHI::BufferUsage::Vertex,
-			.memoryUsage = Velos::RHI::MemoryUsage::CPUToGPU,
-			.initialData = mesh->vertices.data(),
+			.size = vertexBufferSize,
+			.usage = Velos::RHI::BufferUsage::Vertex |
+				Velos::RHI::BufferUsage::TransferDst,
+			.memoryUsage = Velos::RHI::MemoryUsage::GPUOnly,
 			.debugName = "Iryven mesh vertex buffer"
 		});
 
 		Velos::RHI::BufferHandle indexBuffer;
 		try {
 			indexBuffer = device_->CreateBuffer({
-				.size = mesh->indices.size() * sizeof(std::uint32_t),
-				.usage = Velos::RHI::BufferUsage::Index,
-				.memoryUsage = Velos::RHI::MemoryUsage::CPUToGPU,
-				.initialData = mesh->indices.data(),
+				.size = indexBufferSize,
+				.usage = Velos::RHI::BufferUsage::Index |
+					Velos::RHI::BufferUsage::TransferDst,
+				.memoryUsage = Velos::RHI::MemoryUsage::GPUOnly,
 				.debugName = "Iryven mesh index buffer"
 			});
+
+			// The second staging allocation may need up to 15 bytes of padding.
+			auto upload = device_->CreateUploadContext(
+				vertexBufferSize + indexBufferSize + 15);
+			upload->Begin();
+			upload->UploadBuffer({
+				.dstBuffer = vertexBuffer,
+				.size = vertexBufferSize,
+				.data = mesh->vertices.data(),
+				.finalState = Velos::RHI::ResourceState::VertexBuffer,
+			});
+			upload->UploadBuffer({
+				.dstBuffer = indexBuffer,
+				.size = indexBufferSize,
+				.data = mesh->indices.data(),
+				.finalState = Velos::RHI::ResourceState::IndexBuffer,
+			});
+			upload->Flush();
+			device_->AcquireUploadedBuffers(upload->TakePendingBufferAcquires());
 		}
 		catch (...) {
 			device_->DestroyBuffer(vertexBuffer);
@@ -930,13 +1049,13 @@ namespace Iryven {
 
 	Renderer::GpuFont* Renderer::ResolveOrCreateFont(const std::shared_ptr<const Font>& font)
 	{
-		if (!font || !font->IsValid()) {
+		if (!font) {
 			return nullptr;
 		}
-
 		if (const auto existing = fonts_.find(font.get()); existing != fonts_.end()) {
 			return &existing->second;
 		}
+		if (!font->IsValid()) return nullptr;
 
 		const auto pixels = font->GetAtlasPixels();
 
@@ -1034,26 +1153,49 @@ namespace Iryven {
 
 	Renderer::GpuModel* Renderer::ResolveOrCreateModel(const ModelHandle& model)
 	{
-		if (!model || !model->IsValid()) return nullptr;
+		if (!model) return nullptr;
 		if (const auto existing = models_.find(model.get()); existing != models_.end())
 			return &existing->second;
+		if (!model->IsValid()) return nullptr;
 
+		const std::size_t vertexBufferSize = model->vertices.size() * sizeof(Vertex);
+		const std::size_t indexBufferSize =
+			model->indices.size() * sizeof(std::uint32_t);
 		const auto vertexBuffer = device_->CreateBuffer({
-			.size = model->vertices.size() * sizeof(Vertex),
-			.usage = Velos::RHI::BufferUsage::Vertex,
-			.memoryUsage = Velos::RHI::MemoryUsage::CPUToGPU,
-			.initialData = model->vertices.data(),
+			.size = vertexBufferSize,
+			.usage = Velos::RHI::BufferUsage::Vertex |
+				Velos::RHI::BufferUsage::TransferDst,
+			.memoryUsage = Velos::RHI::MemoryUsage::GPUOnly,
 			.debugName = "Iryven model vertex buffer"
 		});
 		Velos::RHI::BufferHandle indexBuffer;
 		try {
 			indexBuffer = device_->CreateBuffer({
-				.size = model->indices.size() * sizeof(std::uint32_t),
-				.usage = Velos::RHI::BufferUsage::Index,
-				.memoryUsage = Velos::RHI::MemoryUsage::CPUToGPU,
-				.initialData = model->indices.data(),
+				.size = indexBufferSize,
+				.usage = Velos::RHI::BufferUsage::Index |
+					Velos::RHI::BufferUsage::TransferDst,
+				.memoryUsage = Velos::RHI::MemoryUsage::GPUOnly,
 				.debugName = "Iryven model index buffer"
 			});
+
+			// The second staging allocation may need up to 15 bytes of padding.
+			auto upload = device_->CreateUploadContext(
+				vertexBufferSize + indexBufferSize + 15);
+			upload->Begin();
+			upload->UploadBuffer({
+				.dstBuffer = vertexBuffer,
+				.size = vertexBufferSize,
+				.data = model->vertices.data(),
+				.finalState = Velos::RHI::ResourceState::VertexBuffer,
+			});
+			upload->UploadBuffer({
+				.dstBuffer = indexBuffer,
+				.size = indexBufferSize,
+				.data = model->indices.data(),
+				.finalState = Velos::RHI::ResourceState::IndexBuffer,
+			});
+			upload->Flush();
+			device_->AcquireUploadedBuffers(upload->TakePendingBufferAcquires());
 		} catch (...) {
 			device_->DestroyBuffer(vertexBuffer);
 			throw;
@@ -1256,31 +1398,28 @@ namespace Iryven {
 
 		for (std::uint32_t frameIndex = 0; frameIndex < k_FramesInFlight; ++frameIndex) {
 			auto& frame = lightingFrames_[frameIndex];
-			frame.lightBuffer = device_->CreateBuffer({
-				.size = lightsBufferSize,
-				.usage = Velos::RHI::BufferUsage::Uniform,
-				.memoryUsage = Velos::RHI::MemoryUsage::CPUToGPU,
-				.debugName = "Frame Lights Buffer"
-			});
-			frame.frameDataBuffer = device_->CreateBuffer({
-				.size = sizeof(glm::mat4) * 3 + sizeof(glm::vec4),
-				.usage = Velos::RHI::BufferUsage::Uniform,
-				.memoryUsage = Velos::RHI::MemoryUsage::CPUToGPU,
-				.debugName = "Frame Data Buffer"
-			});
-			frame.materialBuffer = device_->CreateBuffer({
-				.size = sizeof(GpuMaterial) * k_MaxMaterials,
-				.usage = Velos::RHI::BufferUsage::Storage,
-				.memoryUsage = Velos::RHI::MemoryUsage::CPUToGPU,
-				.debugName = "Frame Material Buffer"
-			});
+			frame.lightBuffer = CreateUploadBackedBuffer(
+				lightsBufferSize,
+				Velos::RHI::BufferUsage::Uniform,
+				"Frame Lights Buffer",
+				"Frame Lights Upload Buffer");
+			frame.frameDataBuffer = CreateUploadBackedBuffer(
+				sizeof(glm::mat4) * 3 + sizeof(glm::vec4),
+				Velos::RHI::BufferUsage::Uniform,
+				"Frame Data Buffer",
+				"Frame Data Upload Buffer");
+			frame.materialBuffer = CreateUploadBackedBuffer(
+				sizeof(GpuMaterial) * k_MaxMaterials,
+				Velos::RHI::BufferUsage::Storage,
+				"Frame Material Buffer",
+				"Frame Material Upload Buffer");
 			frame.lightBindingSet = device_->AllocateBindingSet({
 				.pool = lightsBindingPool_,
 				.layout = lightsBindingLayout_,
 				.debugName = "Frame Lights Binding Set"
 			});
 			const Velos::RHI::BindingBufferInfo bufferInfo{
-				.buffer = frame.lightBuffer,
+				.buffer = frame.lightBuffer.gpuBuffer,
 				.offset = 0,
 				.range = lightsBufferSize
 			};
@@ -1291,7 +1430,7 @@ namespace Iryven {
 				.bufferInfo = &bufferInfo
 			});
 			const Velos::RHI::BindingBufferInfo frameDataBufferInfo{
-				.buffer = frame.frameDataBuffer,
+				.buffer = frame.frameDataBuffer.gpuBuffer,
 				.offset = 0,
 				.range = sizeof(glm::mat4) * 3 + sizeof(glm::vec4)
 			};
@@ -1302,7 +1441,7 @@ namespace Iryven {
 				.bufferInfo = &frameDataBufferInfo
 			});
 			const Velos::RHI::BindingBufferInfo materialBufferInfo{
-				.buffer = frame.materialBuffer,
+				.buffer = frame.materialBuffer.gpuBuffer,
 				.offset = 0,
 				.range = sizeof(GpuMaterial) * k_MaxMaterials
 			};
@@ -1318,8 +1457,8 @@ namespace Iryven {
 	void Renderer::DestroyBufferResources()
 	{
 		for (auto& buffers : textVertexBuffers_) {
-			for (const auto buffer : buffers) {
-				device_->DestroyBuffer(buffer);
+			for (auto& buffer : buffers) {
+				DestroyUploadBackedBuffer(buffer);
 			}
 			buffers.clear();
 		}
@@ -1333,18 +1472,9 @@ namespace Iryven {
 		}
 		for (auto& frame : lightingFrames_) {
 			frame.lightBindingSet = {};
-			if (frame.lightBuffer.IsValid()) {
-				device_->DestroyBuffer(frame.lightBuffer);
-				frame.lightBuffer = {};
-			}
-			if (frame.frameDataBuffer.IsValid()) {
-				device_->DestroyBuffer(frame.frameDataBuffer);
-				frame.frameDataBuffer = {};
-			}
-			if (frame.materialBuffer.IsValid()) {
-				device_->DestroyBuffer(frame.materialBuffer);
-				frame.materialBuffer = {};
-			}
+			DestroyUploadBackedBuffer(frame.lightBuffer);
+			DestroyUploadBackedBuffer(frame.frameDataBuffer);
+			DestroyUploadBackedBuffer(frame.materialBuffer);
 		}
 		fontBindingLayout_ = {};
 		lightsBindingLayout_ = {};

@@ -2,6 +2,8 @@
 
 #include <iryven/rendering/render_context.h>
 
+#include <chrono>
+
 namespace Iryven {
 
 GameLayer::GameLayer()
@@ -30,7 +32,19 @@ void GameLayer::OnUpdate(float deltaTime)
 
 void GameLayer::OnRender(RenderContext& context)
 {
-    context.DrawScene(world_->ExtractRenderScene());
+    using Clock = std::chrono::steady_clock;
+    const auto elapsedMilliseconds = [](Clock::time_point start) {
+        return std::chrono::duration<float, std::milli>(Clock::now() - start)
+            .count();
+    };
+
+    const auto extractionStart = Clock::now();
+    RenderScene scene = world_->ExtractRenderScene();
+    sceneExtractionMs_ = elapsedMilliseconds(extractionStart);
+
+    const auto drawStart = Clock::now();
+    context.DrawScene(scene);
+    drawSceneMs_ = elapsedMilliseconds(drawStart);
 }
 
 void GameLayer::ResolveAssetReferences(const AsynchronousLoader& loader)

@@ -136,6 +136,7 @@ project "Sandbox"
     debugdir (_WORKING_DIR)
     files { "sandbox/**.h", "sandbox/**.cpp" }
     includedirs (IryvenPublicIncludeDirs)
+    includedirs { "external/velos/external/imgui" }
     defines (IryvenPublicDefines)
     links { "Iryven" }
 

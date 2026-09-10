@@ -57,22 +57,41 @@ const EngineConfig& Engine::GetConfig() const noexcept {
     return config_;
 }
 
+const CpuFrameTimings& Engine::GetCpuFrameTimings() const noexcept {
+    return cpuFrameTimings_;
+}
+
 void Engine::Run()
 {
+    using Clock = std::chrono::steady_clock;
+    const auto elapsedMilliseconds = [](Clock::time_point start) {
+        return std::chrono::duration<float, std::milli>(Clock::now() - start)
+            .count();
+    };
     auto previousTime = std::chrono::steady_clock::now();
 
     while (running_) {
-        const auto now = std::chrono::steady_clock::now();
+        const auto frameStart = Clock::now();
+        const auto now = frameStart;
         const float deltaTime =
             std::chrono::duration<float>(now - previousTime).count();
         previousTime = now;
 
+        CpuFrameTimings currentTimings{};
+
+        const auto eventsStart = Clock::now();
         input_.BeginFrame();
         window_->PollEvents();
         input_.EvaluateActions();
+        currentTimings.eventsMs = elapsedMilliseconds(eventsStart);
 
+        const auto updateStart = Clock::now();
         Update(deltaTime);
-        Render();
+        currentTimings.updateMs = elapsedMilliseconds(updateStart);
+
+        Render(currentTimings);
+        currentTimings.frameMs = elapsedMilliseconds(frameStart);
+        cpuFrameTimings_ = currentTimings;
     }
 }
 
@@ -104,21 +123,64 @@ void Engine::Update(float deltaTime)
     layers_.Update(deltaTime);
 }
 
-void Engine::Render()
+void Engine::Render(CpuFrameTimings& timings)
 {
+    using Clock = std::chrono::steady_clock;
+    const auto elapsedMilliseconds = [](Clock::time_point start) {
+        return std::chrono::duration<float, std::milli>(Clock::now() - start)
+            .count();
+    };
+
+    const auto beginFrameStart = Clock::now();
     if (!renderer_->BeginFrame()) {
+        timings.beginFrameMs = elapsedMilliseconds(beginFrameStart);
         return;
     }
+    timings.beginFrameMs = elapsedMilliseconds(beginFrameStart);
+    timings.frameFenceWaitMs = renderer_->GetFrameFenceWaitMs();
+    timings.acquireImageMs = renderer_->GetAcquireImageMs();
 
     if (imGui_) {
+        const auto uiBuildStart = Clock::now();
         imGui_->BeginFrame();
         layers_.RenderImGui();
         imGui_->EndFrame();
+        timings.uiBuildMs = elapsedMilliseconds(uiBuildStart);
     }
+
+    const auto assetResolveStart = Clock::now();
     gameLayer_->ResolveAssetReferences(*asynchronousLoader_);
+    timings.assetResolveMs = elapsedMilliseconds(assetResolveStart);
+
+    const auto sceneRenderStart = Clock::now();
     layers_.Render(*renderer_);
-    if (imGui_) renderer_->DrawImGui();
+    timings.sceneRenderMs = elapsedMilliseconds(sceneRenderStart);
+	timings.sceneExtractionMs = gameLayer_->GetSceneExtractionMs();
+	timings.frameGraphMs = gameLayer_->GetDrawSceneMs();
+	const RendererCpuTimings& rendererTimings = renderer_->GetCpuTimings();
+	const FrameGraphCpuTimings& frameGraphTimings = rendererTimings.frameGraph;
+	timings.frameGraphSchedulingMs = frameGraphTimings.schedulingMs;
+	timings.commandAcquireMs = frameGraphTimings.acquireCommandListMs;
+	timings.commandBeginMs = frameGraphTimings.commandBeginMs;
+	timings.resourceSetupMs = frameGraphTimings.resourceSetupMs;
+	timings.preRenderMs = frameGraphTimings.preRenderMs;
+	timings.uploadLightsMs = rendererTimings.uploadLightsMs;
+	timings.uploadMaterialsMs = rendererTimings.uploadMaterialsMs;
+	timings.uploadFrameDataMs = rendererTimings.uploadFrameDataMs;
+	timings.renderingSetupMs = frameGraphTimings.renderingSetupMs;
+	timings.drawRecordMs = frameGraphTimings.drawRecordMs;
+	timings.commandEndMs = frameGraphTimings.commandEndMs;
+	timings.queueSubmitMs = frameGraphTimings.queueSubmitMs;
+
+    if (imGui_) {
+        const auto uiDrawStart = Clock::now();
+        renderer_->DrawImGui();
+        timings.uiDrawMs = elapsedMilliseconds(uiDrawStart);
+    }
+
+    const auto presentStart = Clock::now();
     renderer_->EndFrame();
+    timings.presentMs = elapsedMilliseconds(presentStart);
 
     if (!firstFramePresented_) {
         window_->Show();
