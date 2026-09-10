@@ -2,12 +2,18 @@
 #include <iryven/rendering/framegraph.h>
 
 #include <cassert>
+#include <chrono>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include <glm/common.hpp>
 #include <shader/shader_compiler.h>
+
+extern "C" int glfwInit();
+extern "C" void glfwTerminate();
 
 namespace {
 
@@ -23,6 +29,11 @@ struct CollisionBodyBTag {
     bool enabled = true;
 };
 
+struct SnapshotVariable {
+    int value = 0;
+    std::string label;
+};
+
 class TrackingLayer final : public Iryven::Layer {
 public:
     TrackingLayer(
@@ -34,6 +45,7 @@ public:
     void OnAttach() override { calls_.push_back(GetName() + ":attach"); }
     void OnDetach() override { calls_.push_back(GetName() + ":detach"); }
     void OnUpdate(float) override { calls_.push_back(GetName() + ":update"); }
+    void OnImGuiRender() override { calls_.push_back(GetName() + ":imgui"); }
     bool OnEvent(Iryven::Event&) override
     {
         calls_.push_back(GetName() + ":event");
@@ -45,10 +57,136 @@ private:
     bool consumesEvents_;
 };
 
+class CountingFrameGraphPass final : public Iryven::FrameGraphRenderPass {
+public:
+    explicit CountingFrameGraphPass(int& renderCount)
+        : renderCount_(renderCount) {}
+
+    void AddUI() override {}
+    void PreRender(Velos::RHI::ICommandList&,
+                   const Iryven::RenderScene&) override {}
+    void Render(Velos::RHI::ICommandList&,
+                const Iryven::RenderScene&) override
+    {
+        ++renderCount_;
+    }
+    void OnResize(Velos::RHI::IDevice&, std::uint32_t, std::uint32_t) override {}
+
+private:
+    int& renderCount_;
+};
+
 } // namespace
 
 int main()
 {
+    {
+        Iryven::GameLayer pausedGame;
+        auto body = pausedGame.GetWorld().CreateEntity("Paused Body");
+        body.Add<Iryven::Transform>(Iryven::Transform{ .position = {0.0f, 4.0f, 0.0f} });
+        body.Add<Iryven::RigidBody>(Iryven::RigidBody{ .type = Iryven::BodyType::Dynamic });
+        body.Add<Iryven::Collider>(Iryven::Collider::Sphere(0.5f));
+        pausedGame.SetSimulationEnabled(false);
+        for (int step = 0; step < 30; ++step) pausedGame.OnUpdate(1.0f / 60.0f);
+        assert(body.Get<Iryven::Transform>().position.y == 4.0f);
+        pausedGame.SetSimulationEnabled(true);
+        for (int step = 0; step < 30; ++step) pausedGame.OnUpdate(1.0f / 60.0f);
+        assert(body.Get<Iryven::Transform>().position.y < 4.0f);
+        pausedGame.SetSimulationEnabled(false);
+        body.Get<Iryven::Transform>().position.y = 4.0f;
+        pausedGame.GetWorld().ResetPhysics();
+        pausedGame.SetSimulationEnabled(true);
+        pausedGame.OnUpdate(1.0f / 60.0f);
+        assert(body.Get<Iryven::Transform>().position.y > 3.9f);
+    }
+    {
+        Iryven::World world;
+        auto entity = world.CreateEntity("Snapshot Probe");
+        entity.Add<SnapshotVariable>(SnapshotVariable{ .value = 42, .label = "before play" });
+        auto flecsEntity = world.GetFlecsWorld().entity(entity.GetId());
+        auto backup = flecsEntity.clone(true);
+        backup.add(flecs::Prefab);
+        std::size_t visibleEntityCount = 0;
+        world.ForEachEntity([&visibleEntityCount](Iryven::Entity) { ++visibleEntityCount; });
+        assert(visibleEntityCount == 1);
+
+        entity.Get<SnapshotVariable>() = SnapshotVariable{ .value = 7, .label = "during play" };
+        entity.Add<Iryven::Light>();
+        flecsEntity.clear();
+        backup.clone(true, flecsEntity.id());
+        flecsEntity.remove(flecs::Prefab);
+        flecsEntity.set_name("Snapshot Probe");
+
+        assert(entity.Has<SnapshotVariable>());
+        assert(entity.Get<SnapshotVariable>().value == 42);
+        assert(entity.Get<SnapshotVariable>().label == "before play");
+        assert(!entity.Has<Iryven::Light>());
+        backup.destruct();
+    }
+    {
+        Iryven::World scene;
+        auto empty = scene.CreateEntity("EmptyEntity");
+        std::vector<std::uint64_t> sceneEntityIds;
+        scene.ForEachEntity([&sceneEntityIds](Iryven::Entity entity) {
+            sceneEntityIds.push_back(entity.GetId());
+        });
+        assert(sceneEntityIds.size() == 1);
+        assert(sceneEntityIds.front() == empty.GetId());
+        assert(!empty.Has<Iryven::Transform>());
+        auto probe = scene.CreateEntity("SerializationProbe");
+        probe.Add<Iryven::Transform>(Iryven::Transform{.position = {3, 4, 5}});
+        probe.Add<Iryven::Camera>(Iryven::Camera{.verticalFov = 75});
+        probe.Add<Iryven::Light>(Iryven::Light{.intensity = 7});
+        const auto probeMesh = Iryven::PrimitiveMeshes::Cube();
+        probe.Add<Iryven::MeshRenderer>(probeMesh);
+        const auto path = std::filesystem::temp_directory_path() /
+            ("iryven-scene-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".json");
+        scene.SerializeScene(path);
+        std::ifstream file(path, std::ios::binary);
+        const std::string json{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+        file.close();
+        Iryven::World loadedScene;
+        auto loadedProbe = loadedScene.CreateEntity("SerializationProbe");
+        loadedProbe.Add<Iryven::Transform>();
+        loadedProbe.Add<Iryven::MeshRenderer>(probeMesh);
+        loadedScene.CreateEntity("PreservedEntity");
+        loadedScene.DeserializeScene(path);
+        std::size_t loadedEntityCount = 0;
+        loadedScene.ForEachEntity([&loadedEntityCount](Iryven::Entity) {
+            ++loadedEntityCount;
+        });
+        assert(loadedEntityCount == 3);
+        assert(loadedProbe.Get<Iryven::Transform>().position == glm::vec3(3, 4, 5));
+        assert(loadedProbe.Get<Iryven::Camera>().verticalFov == 75);
+        assert(loadedProbe.Get<Iryven::Light>().intensity == 7);
+        assert(loadedProbe.Get<Iryven::MeshRenderer>().mesh == probeMesh);
+        loadedScene.SerializeScene(path);
+        std::ifstream loadedFile(path, std::ios::binary);
+        const std::string loadedJson{std::istreambuf_iterator<char>(loadedFile), std::istreambuf_iterator<char>()};
+        loadedFile.close();
+        assert(loadedJson.find("SerializationProbe") != std::string::npos);
+        assert(loadedJson.find("PreservedEntity") != std::string::npos);
+        for (const std::string invalid : {std::string{}, std::string{"not json"}, json + " trailing garbage", json + std::string(1, '\0')}) {
+            { std::ofstream invalidFile(path, std::ios::binary); invalidFile << invalid; }
+            bool rejected = false;
+            try { loadedScene.DeserializeScene(path); }
+            catch (const std::runtime_error&) { rejected = true; }
+            assert(rejected);
+        }
+        std::filesystem::remove(path);
+        bool rejectedMissing = false;
+        try { loadedScene.DeserializeScene(path); }
+        catch (const std::runtime_error&) { rejectedMissing = true; }
+        assert(rejectedMissing);
+        assert(json.find("SerializationProbe") != std::string::npos);
+        bool rejectedDirectory = false;
+        try {
+            scene.SerializeScene(std::filesystem::temp_directory_path());
+        } catch (const std::runtime_error&) {
+            rejectedDirectory = true;
+        }
+        assert(rejectedDirectory);
+    }
 	{
         Iryven::FrameGraphBuilder builder;
         Iryven::FrameGraph graph;
@@ -94,6 +232,58 @@ int main()
 
         graph.Reset();
         graph.AddNode({
+            .name = "draw",
+            .inputs = {{
+                .type = Iryven::FrameGraphResourceType::Buffer,
+                .name = "simulation",
+            }},
+            .outputs = {{
+                .type = Iryven::FrameGraphResourceType::Buffer,
+                .info = Iryven::FrameGraphBufferInfo{
+                    .size = 256,
+                    .usage = Velos::RHI::BufferUsage::Storage,
+                    .concurrentQueues = true,
+                },
+                .external = true,
+                .name = "lighting",
+            }},
+        });
+        graph.AddNode({
+            .name = "simulate",
+            .outputs = {{
+                .type = Iryven::FrameGraphResourceType::Buffer,
+                .info = Iryven::FrameGraphBufferInfo{
+                    .size = 256,
+                    .usage = Velos::RHI::BufferUsage::Storage,
+                    .concurrentQueues = true,
+                },
+                .external = true,
+                .name = "simulation",
+            }},
+            .queue = Velos::RHI::QueueType::Compute,
+        });
+        graph.AddNode({
+            .name = "post",
+            .inputs = {{
+                .type = Iryven::FrameGraphResourceType::Buffer,
+                .name = "lighting",
+            }},
+            .queue = Velos::RHI::QueueType::Compute,
+        });
+        graph.Compile();
+        const auto batches = graph.ExecutionBatches();
+        assert(batches.size() == 3);
+        assert(batches[0].queue == Velos::RHI::QueueType::Compute);
+        assert(batches[0].nodes.size() == 1);
+        assert(batches[1].queue == Velos::RHI::QueueType::Graphics);
+        assert(batches[1].dependencies.size() == 1);
+        assert(batches[1].dependencies[0] == 0);
+        assert(batches[2].queue == Velos::RHI::QueueType::Compute);
+        assert(batches[2].dependencies.size() == 1);
+        assert(batches[2].dependencies[0] == 1);
+
+        graph.Reset();
+        graph.AddNode({
             .name = "a",
             .inputs = {{ .name = "b-out" }},
             .outputs = {{
@@ -120,6 +310,85 @@ int main()
         }
         assert(cycleDetected);
         graph.Shutdown();
+    }
+
+    {
+        assert(glfwInit() != 0);
+        std::unique_ptr<Velos::RHI::IDevice, void(*)(Velos::RHI::IDevice*)>
+            device(Velos::RHI::CreateDevice({
+                .graphicsAPI = Velos::RHI::GraphicsAPI::Vulkan,
+                .enableValidation = true,
+                .applicationName = "Iryven framegraph async test",
+                .pipelineCachePath = nullptr,
+            }), Velos::RHI::DestroyDevice);
+        assert(device != nullptr);
+
+        int computeRenderCount = 0;
+        int graphicsRenderCount = 0;
+        int postRenderCount = 0;
+        CountingFrameGraphPass computePass(computeRenderCount);
+        CountingFrameGraphPass graphicsPass(graphicsRenderCount);
+        CountingFrameGraphPass postPass(postRenderCount);
+        Iryven::FrameGraphBuilder builder;
+        builder.Init(*device);
+        builder.RegisterRenderPass("simulate", computePass);
+        builder.RegisterRenderPass("draw", graphicsPass);
+        builder.RegisterRenderPass("post", postPass);
+        Iryven::FrameGraph graph;
+        graph.Init(builder);
+        graph.AddNode({
+            .name = "draw",
+            .inputs = {{
+                .type = Iryven::FrameGraphResourceType::Buffer,
+                .name = "simulation",
+            }},
+            .outputs = {{
+                .type = Iryven::FrameGraphResourceType::Buffer,
+                .info = Iryven::FrameGraphBufferInfo{
+                    .size = 256,
+                    .usage = Velos::RHI::BufferUsage::Storage,
+                },
+                .name = "lighting",
+            }},
+        });
+        graph.AddNode({
+            .name = "simulate",
+            .outputs = {{
+                .type = Iryven::FrameGraphResourceType::Buffer,
+                .info = Iryven::FrameGraphBufferInfo{
+                    .size = 256,
+                    .usage = Velos::RHI::BufferUsage::Storage,
+                },
+                .name = "simulation",
+            }},
+            .queue = Velos::RHI::QueueType::Compute,
+        });
+        graph.AddNode({
+            .name = "post",
+            .inputs = {{
+                .type = Iryven::FrameGraphResourceType::Buffer,
+                .name = "lighting",
+            }},
+            .queue = Velos::RHI::QueueType::Compute,
+        });
+        graph.Compile();
+        const auto* simulation = graph.GetResource("simulation");
+        assert(simulation != nullptr);
+        assert(std::get<Iryven::FrameGraphBufferInfo>(simulation->info)
+                   .concurrentQueues);
+
+        graph.BeginFrame();
+        graph.Render({});
+        assert(graph.GraphicsSubmissionWaits().size() == 1);
+        device->WaitIdle();
+        assert(computeRenderCount == 1);
+        assert(graphicsRenderCount == 1);
+        assert(postRenderCount == 1);
+
+        graph.Shutdown();
+        builder.Shutdown();
+        device.reset();
+        glfwTerminate();
     }
 
 	const auto bindlessVertexShader = Velos::ShaderCompiler::CompileFile({
@@ -226,6 +495,7 @@ int main()
     layers.PushOverlay(
         std::make_unique<TrackingLayer>("debug", layerCalls));
     layers.Update(1.0f / 60.0f);
+    layers.RenderImGui();
 
     Iryven::AppTickEvent event;
     layers.PropagateEvent(event);
@@ -233,6 +503,7 @@ int main()
     assert((layerCalls == std::vector<std::string>{
         "game:attach", "ui:attach", "debug:attach",
         "game:update", "ui:update", "debug:update",
+        "game:imgui", "ui:imgui", "debug:imgui",
         "debug:event", "ui:event" }));
 
     auto removedGameLayer = layers.PopLayer(gameLayer);
