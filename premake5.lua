@@ -122,7 +122,7 @@ project "Iryven"
         runtime "Release"
         optimize "Speed"
         symbols "On"
-        defines { "IRYVEN_PROFILE" }
+        defines { "IRYVEN_PROFILE", "TRACY_ENABLE" }
     filter {}
 
 project "Sandbox"
