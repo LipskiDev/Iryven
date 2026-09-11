@@ -30,6 +30,7 @@ public:
 private:
     std::unique_ptr<World> world_;
     bool simulationEnabled_ = true;
+    float simulationDeltaTime_ = 0.0f;
     float sceneExtractionMs_ = 0.0f;
     float drawSceneMs_ = 0.0f;
 };

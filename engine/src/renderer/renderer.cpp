@@ -6,9 +6,10 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <limits>
-#include <string_view>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -20,15 +21,13 @@
 #include <shader/shader_compiler.h>
 #include <rhi/upload_context.h>
 
+#include "passes/opaque.h"
+#include "passes/cloth_compute.h"
+#include "passes/cloth_draw.h"
+
 namespace {
 
 using CpuClock = std::chrono::steady_clock;
-
-[[nodiscard]] float ElapsedMilliseconds(CpuClock::time_point start)
-{
-	return std::chrono::duration<float, std::milli>(CpuClock::now() - start)
-		.count();
-}
 
 struct TextVertex {
 	glm::vec2 position;
@@ -97,54 +96,6 @@ namespace Iryven {
 	};
 	static_assert(sizeof(GpuMaterial) == 80);
 
-	class Renderer::OpaquePass final : public FrameGraphRenderPass {
-	public:
-		explicit OpaquePass(Renderer& renderer) : renderer_(renderer) {}
-
-		void AddUI() override {}
-
-		void PreRender(
-			Velos::RHI::ICommandList& commands, const RenderScene& scene) override
-		{
-			const auto lightsStart = CpuClock::now();
-			renderer_.UploadLights(commands, scene.lights);
-			renderer_.cpuTimings_.uploadLightsMs += ElapsedMilliseconds(lightsStart);
-
-			const auto materialsStart = CpuClock::now();
-			renderer_.UploadMaterials(commands, scene.objects);
-			renderer_.cpuTimings_.uploadMaterialsMs +=
-				ElapsedMilliseconds(materialsStart);
-			hasCamera_ = scene.camera.has_value();
-			if (hasCamera_) {
-				frameData_ = renderer_.BuildFrameData(*scene.camera);
-				const auto frameDataStart = CpuClock::now();
-				renderer_.UploadFrameData(commands, frameData_);
-				renderer_.cpuTimings_.uploadFrameDataMs +=
-					ElapsedMilliseconds(frameDataStart);
-			}
-		}
-
-		void Render(
-			Velos::RHI::ICommandList& commands, const RenderScene& scene) override
-		{
-			if (hasCamera_) {
-				for (const RenderObject& object : scene.objects) {
-					renderer_.DrawObject(commands, object, frameData_);
-				}
-			}
-			for (const RenderText& text : scene.texts) {
-				renderer_.DrawText(commands, text);
-			}
-		}
-
-		void OnResize(Velos::RHI::IDevice&, std::uint32_t, std::uint32_t) override {}
-
-	private:
-		Renderer& renderer_;
-		FrameData frameData_{};
-		bool hasCamera_ = false;
-	};
-
 	Renderer::Renderer(Window& window, AssetUploadQueue& assetUploads)
 		: window_(window), assetUploads_(assetUploads)
 	{
@@ -187,7 +138,11 @@ namespace Iryven {
 		frameGraphBuilder_.Init(*device_);
 		frameGraph_.Init(frameGraphBuilder_);
 		opaquePass_ = std::make_unique<OpaquePass>(*this);
+		clothCompute_ = std::make_unique<ClothCompute>(*this);
+		clothDraw_ = std::make_unique<ClothDraw>(*this);
 		frameGraphBuilder_.RegisterRenderPass("opaque", *opaquePass_);
+		frameGraphBuilder_.RegisterRenderPass("clothCompute", *clothCompute_);
+		frameGraphBuilder_.RegisterRenderPass("clothDraw", *clothDraw_);
 
 		const Color clearColor = Color::CornflowerBlue;
 		frameGraph_.AddNode({
@@ -221,6 +176,46 @@ namespace Iryven {
 				},
 			},
 		});
+
+		if (clothComputePipeline_) {
+			frameGraph_.AddNode({
+				.name = "clothCompute",
+				.outputs = {
+					{
+						.type = FrameGraphResourceType::Reference,
+						.name = "clothSimulationComplete",
+					},
+				},
+				.queue = Velos::RHI::QueueType::Compute,
+			});
+		}
+		std::vector<FrameGraphResourceInputCreation> clothDrawInputs;
+		if (clothComputePipeline_) {
+			clothDrawInputs.push_back({
+				.type = FrameGraphResourceType::Reference,
+				.name = "clothSimulationComplete",
+			});
+		}
+		clothDrawInputs.push_back({
+			.type = FrameGraphResourceType::Attachment,
+			.access = FrameGraphAccess::ColorAttachmentReadWrite,
+			.info = FrameGraphTextureInfo{
+				.loadOp = RenderPassOperation::Load,
+			},
+			.name = "backbuffer",
+		});
+		clothDrawInputs.push_back({
+			.type = FrameGraphResourceType::Attachment,
+			.access = FrameGraphAccess::DepthStencilReadWrite,
+			.info = FrameGraphTextureInfo{
+				.loadOp = RenderPassOperation::Load,
+			},
+			.name = "depth",
+		});
+		frameGraph_.AddNode({
+			.name = "clothDraw",
+			.inputs = std::move(clothDrawInputs),
+		});
 		frameGraph_.Compile();
 	}
 
@@ -233,7 +228,13 @@ namespace Iryven {
 		device_->WaitIdle();
 		frameGraph_.Shutdown();
 		frameGraphBuilder_.Shutdown();
+		clothDraw_.reset();
+		clothCompute_.reset();
 		opaquePass_.reset();
+		for (auto& [id, cloth] : cloths_) DestroyGpuCloth(cloth);
+		cloths_.clear();
+		for (auto& retired : retiredCloths_) DestroyGpuCloth(retired.resources);
+		retiredCloths_.clear();
 		DestroyPipelineResources();
 		DestroyBindlessResources();
 		DestroyMeshResources();
@@ -253,6 +254,7 @@ namespace Iryven {
 		}
 
 		cpuTimings_ = {};
+		PrepareCloths(renderScene);
 		frameGraph_.Render(renderScene);
 		cpuTimings_.frameGraph = frameGraph_.GetCpuTimings();
 	}
@@ -291,6 +293,7 @@ namespace Iryven {
 			frameSubmissionSerials_.at(frame_.frameIndex));
 		bindlessTextureManager_->CollectGarbage(completedSubmissionSerial_);
 		CollectRetiredModels(completedSubmissionSerial_);
+		CollectRetiredCloths(completedSubmissionSerial_);
 		CollectUnusedMeshes();
 		CollectUnusedFonts();
 
@@ -368,6 +371,355 @@ namespace Iryven {
 		commands.BindIndexBuffer(mesh ? mesh->indexBuffer : model->indexBuffer, Velos::RHI::IndexType::U32);
 		if (model) commands.DrawIndexed(object.indexCount, object.firstIndex, object.vertexOffset);
 		else commands.DrawIndexed(mesh->indexCount);
+	}
+
+	Renderer::GpuCloth* Renderer::ResolveOrCreateCloth(
+		const RenderCloth& cloth)
+	{
+		if (cloth.id == 0 || cloth.resolution.x < 2 || cloth.resolution.y < 2) {
+			return nullptr;
+		}
+		const std::uint64_t particleCount64 =
+			static_cast<std::uint64_t>(cloth.resolution.x) * cloth.resolution.y;
+		const std::uint64_t indexCount64 =
+			static_cast<std::uint64_t>(cloth.resolution.x - 1) *
+			(cloth.resolution.y - 1) * 6;
+		if (particleCount64 > std::numeric_limits<std::uint32_t>::max() ||
+			indexCount64 > std::numeric_limits<std::uint32_t>::max()) {
+			throw std::runtime_error("Cloth grid exceeds 32-bit draw limits");
+		}
+
+		if (auto existing = cloths_.find(cloth.id); existing != cloths_.end()) {
+			const GpuCloth& gpu = existing->second;
+			const bool unchanged = gpu.resolution == cloth.resolution &&
+				gpu.size.x == cloth.size.x && gpu.size.y == cloth.size.y &&
+				gpu.mass == cloth.mass && gpu.pinTopLeft == cloth.pinTopLeft &&
+				gpu.pinTopRight == cloth.pinTopRight;
+			if (unchanged) return &existing->second;
+
+			retiredCloths_.push_back({
+				.resources = std::move(existing->second),
+				.retirementSubmission = lastSubmittedSerial_,
+			});
+			cloths_.erase(existing);
+		}
+
+		const std::uint32_t particleCount =
+			static_cast<std::uint32_t>(particleCount64);
+		const std::uint32_t indexCount =
+			static_cast<std::uint32_t>(indexCount64);
+		std::vector<ClothParticle> particles(particleCount);
+		const float inverseMass = cloth.mass > 0.0f ? 1.0f / cloth.mass : 0.0f;
+		for (std::uint32_t y = 0; y < cloth.resolution.y; ++y) {
+			for (std::uint32_t x = 0; x < cloth.resolution.x; ++x) {
+				const std::uint32_t index = y * cloth.resolution.x + x;
+				const float u = static_cast<float>(x) /
+					static_cast<float>(cloth.resolution.x - 1);
+				const float v = static_cast<float>(y) /
+					static_cast<float>(cloth.resolution.y - 1);
+				const bool pinned = y == 0 &&
+					((x == 0 && cloth.pinTopLeft) ||
+					 (x == cloth.resolution.x - 1 && cloth.pinTopRight));
+				const glm::vec3 position{
+					(u - 0.5f) * cloth.size.x,
+					(0.5f - v) * cloth.size.y,
+					0.0f,
+				};
+				particles[index] = {
+					.positionAndInverseMass = glm::vec4(
+						position, pinned ? 0.0f : inverseMass),
+					.previousPosition = glm::vec4(position, 0.0f),
+					.normal = glm::vec4(0.0f, 0.0f, 1.0f, 0.0f),
+				};
+			}
+		}
+
+		std::vector<std::uint32_t> indices;
+		indices.reserve(indexCount);
+		for (std::uint32_t y = 0; y + 1 < cloth.resolution.y; ++y) {
+			for (std::uint32_t x = 0; x + 1 < cloth.resolution.x; ++x) {
+				const std::uint32_t topLeft = y * cloth.resolution.x + x;
+				const std::uint32_t topRight = topLeft + 1;
+				const std::uint32_t bottomLeft = topLeft + cloth.resolution.x;
+				const std::uint32_t bottomRight = bottomLeft + 1;
+				indices.insert(indices.end(), {
+					topLeft, bottomLeft, topRight,
+					topRight, bottomLeft, bottomRight,
+				});
+			}
+		}
+
+		GpuCloth gpu{
+			.resolution = cloth.resolution,
+			.size = cloth.size,
+			.mass = cloth.mass,
+			.pinTopLeft = cloth.pinTopLeft,
+			.pinTopRight = cloth.pinTopRight,
+			.particleCount = particleCount,
+			.indexCount = indexCount,
+		};
+		const std::uint64_t particleBytes = particles.size() * sizeof(ClothParticle);
+		const std::uint64_t indexBytes = indices.size() * sizeof(std::uint32_t);
+		try {
+			for (BufferHandle& particleBuffer : gpu.particleBuffers) {
+				particleBuffer = device_->CreateBuffer({
+					.size = particleBytes,
+					.usage = BufferUsage::Storage | BufferUsage::TransferDst,
+					.memoryUsage = MemoryUsage::GPUOnly,
+					.concurrentQueues = true,
+					.debugName = "Iryven cloth particle buffer",
+				});
+			}
+			gpu.indexBuffer = device_->CreateBuffer({
+				.size = indexBytes,
+				.usage = BufferUsage::Index | BufferUsage::TransferDst,
+				.memoryUsage = MemoryUsage::GPUOnly,
+				.debugName = "Iryven cloth index buffer",
+			});
+
+			auto upload = device_->CreateUploadContext(
+				particleBytes * 2 + indexBytes + 32);
+			upload->Begin();
+			for (BufferHandle particleBuffer : gpu.particleBuffers) {
+				upload->UploadBuffer({
+					.dstBuffer = particleBuffer,
+					.size = particleBytes,
+					.data = particles.data(),
+					.finalState = ResourceState::ShaderRead,
+				});
+			}
+			upload->UploadBuffer({
+				.dstBuffer = gpu.indexBuffer,
+				.size = indexBytes,
+				.data = indices.data(),
+				.finalState = ResourceState::IndexBuffer,
+			});
+			upload->Flush();
+			device_->AcquireUploadedBuffers(upload->TakePendingBufferAcquires());
+
+			const BindingPoolSize poolSize{
+				.type = BindingType::StorageBuffer,
+				.count = clothComputePipeline_ ? 6u : 2u,
+			};
+			gpu.bindingPool = device_->CreateBindingPool({
+				.poolSizes = &poolSize,
+				.poolSizeCount = 1,
+				.maxSets = clothComputePipeline_ ? 4u : 2u,
+				.debugName = "Iryven cloth binding pool",
+			});
+
+			for (std::uint32_t index = 0; index < 2; ++index) {
+				gpu.renderBindings[index] = device_->AllocateBindingSet({
+					.pool = gpu.bindingPool,
+					.layout = clothRenderBindingLayout_,
+					.debugName = "Iryven cloth render binding set",
+				});
+				const BindingBufferInfo renderInfo{
+					.buffer = gpu.particleBuffers[index],
+					.range = particleBytes,
+				};
+				device_->UpdateBindingSet({
+					.dstSet = gpu.renderBindings[index],
+					.binding = 0,
+					.type = BindingType::StorageBuffer,
+					.bufferInfo = &renderInfo,
+				});
+
+				if (clothComputePipeline_) {
+					gpu.simulationBindings[index] = device_->AllocateBindingSet({
+						.pool = gpu.bindingPool,
+						.layout = clothSimulationBindingLayout_,
+						.debugName = "Iryven cloth simulation binding set",
+					});
+					const BindingBufferInfo inputInfo{
+						.buffer = gpu.particleBuffers[index],
+						.range = particleBytes,
+					};
+					const BindingBufferInfo outputInfo{
+						.buffer = gpu.particleBuffers[1u - index],
+						.range = particleBytes,
+					};
+					device_->UpdateBindingSet({
+						.dstSet = gpu.simulationBindings[index],
+						.binding = 0,
+						.type = BindingType::StorageBuffer,
+						.bufferInfo = &inputInfo,
+					});
+					device_->UpdateBindingSet({
+						.dstSet = gpu.simulationBindings[index],
+						.binding = 1,
+						.type = BindingType::StorageBuffer,
+						.bufferInfo = &outputInfo,
+					});
+				}
+			}
+		} catch (...) {
+			DestroyGpuCloth(gpu);
+			throw;
+		}
+
+		auto [entry, inserted] = cloths_.emplace(cloth.id, std::move(gpu));
+		(void)inserted;
+		return &entry->second;
+	}
+
+	void Renderer::PrepareCloths(const RenderScene& scene)
+	{
+		++clothSceneGeneration_;
+		for (const RenderCloth& cloth : scene.cloths) {
+			if (GpuCloth* gpu = ResolveOrCreateCloth(cloth)) {
+				gpu->lastSeenGeneration = clothSceneGeneration_;
+			}
+		}
+
+		for (auto it = cloths_.begin(); it != cloths_.end();) {
+			if (it->second.lastSeenGeneration == clothSceneGeneration_) {
+				++it;
+				continue;
+			}
+			retiredCloths_.push_back({
+				.resources = std::move(it->second),
+				.retirementSubmission = lastSubmittedSerial_,
+			});
+			it = cloths_.erase(it);
+		}
+		CollectRetiredCloths(completedSubmissionSerial_);
+	}
+
+	void Renderer::SimulateCloths(
+		ICommandList& commands, const RenderScene& scene)
+	{
+		if (!clothComputePipeline_ || scene.deltaTime <= 0.0f) return;
+
+		const float deltaTime = std::clamp(scene.deltaTime, 0.0f, 1.0f / 30.0f);
+		static float time = 0.0f;
+		time += deltaTime;
+		commands.BindComputePipeline(clothComputePipeline_);
+		for (const RenderCloth& cloth : scene.cloths) {
+			const auto found = cloths_.find(cloth.id);
+			if (found == cloths_.end()) continue;
+			GpuCloth& gpu = found->second;
+			const std::uint32_t outputState = 1u - gpu.currentState;
+			commands.Barrier({
+				.buffer = gpu.particleBuffers[outputState],
+				.oldState = ResourceState::ShaderRead,
+				.newState = ResourceState::ShaderReadWrite,
+				.sourceQueue = QueueType::Compute,
+				.destinationQueue = QueueType::Compute,
+			});
+			commands.SetComputeBindings(
+				clothComputePipeline_, 0,
+				gpu.simulationBindings[gpu.currentState]);
+
+			ClothSimulationConstants constants{
+				.resolutionX = gpu.resolution.x,
+				.resolutionY = gpu.resolution.y,
+				.clothWidth = gpu.size.x,
+				.clothHeight = gpu.size.y,
+				.deltaTime = deltaTime,
+				.stiffness = cloth.stiffness,
+				.damping = cloth.damping,
+				.gravityScale = cloth.gravityScale,
+				.phase = static_cast<std::uint32_t>(ClothSimulationPhase::Integrate),
+				.solverIterations = cloth.solverIterations,
+				.particleCount = gpu.particleCount,
+				.time = time,
+			};
+			const std::uint32_t groupCount = (gpu.particleCount + 63u) / 64u;
+			commands.PushConstants(
+				ShaderStage::Compute, 0, sizeof(constants), &constants);
+			commands.Dispatch(groupCount, 1, 1);
+
+			for (std::uint32_t iteration = 0;
+				 iteration < cloth.solverIterations; ++iteration) {
+				commands.Barrier({
+					.buffer = gpu.particleBuffers[outputState],
+					.oldState = ResourceState::ShaderReadWrite,
+					.newState = ResourceState::ShaderReadWrite,
+					.sourceQueue = QueueType::Compute,
+					.destinationQueue = QueueType::Compute,
+				});
+				constants.phase = static_cast<std::uint32_t>(
+					ClothSimulationPhase::SolveConstraints);
+				constants.iteration = iteration;
+				commands.PushConstants(
+					ShaderStage::Compute, 0, sizeof(constants), &constants);
+				commands.Dispatch(groupCount, 1, 1);
+			}
+
+			commands.Barrier({
+				.buffer = gpu.particleBuffers[outputState],
+				.oldState = ResourceState::ShaderReadWrite,
+				.newState = ResourceState::ShaderReadWrite,
+				.sourceQueue = QueueType::Compute,
+				.destinationQueue = QueueType::Compute,
+			});
+			constants.phase = static_cast<std::uint32_t>(
+				ClothSimulationPhase::RecalculateNormals);
+			commands.PushConstants(
+				ShaderStage::Compute, 0, sizeof(constants), &constants);
+			commands.Dispatch(groupCount, 1, 1);
+
+			const bool aliasesGraphics = device_->GetQueueRelationship(
+				QueueType::Compute, QueueType::Graphics) ==
+				QueueRelationship::SameQueue;
+			commands.Barrier({
+				.buffer = gpu.particleBuffers[outputState],
+				.oldState = ResourceState::ShaderReadWrite,
+				.newState = ResourceState::ShaderRead,
+				.sourceQueue = QueueType::Compute,
+				.destinationQueue = aliasesGraphics
+					? QueueType::Graphics : QueueType::Compute,
+			});
+			gpu.currentState = outputState;
+		}
+	}
+
+	void Renderer::DrawCloths(
+		ICommandList& commands, const RenderScene& scene)
+	{
+		if (!scene.camera || scene.cloths.empty()) return;
+
+		struct DrawConstants {
+			glm::mat4 model;
+			std::uint32_t materialIndex;
+			std::uint32_t resolutionX;
+			std::uint32_t resolutionY;
+			std::uint32_t padding = 0;
+		};
+		static_assert(sizeof(DrawConstants) == 80);
+
+		commands.BindPipeline(clothGraphicsPipeline_);
+		commands.SetBindings(
+			clothGraphicsPipeline_, 0,
+			lightingFrames_.at(frame_.frameIndex).lightBindingSet);
+		commands.SetBindings(
+			clothGraphicsPipeline_, 1, bindlessTextureManager_->BindingSet());
+		for (const RenderCloth& cloth : scene.cloths) {
+			const auto found = cloths_.find(cloth.id);
+			if (found == cloths_.end()) continue;
+			const GpuCloth& gpu = found->second;
+			const MaterialSlotKey materialKey{
+				.model = nullptr,
+				.material = cloth.material.get(),
+			};
+			const auto materialSlot = cloth.material
+				? materialSlots_.find(materialKey) : materialSlots_.end();
+			const DrawConstants constants{
+				.model = cloth.transform,
+				.materialIndex = materialSlot == materialSlots_.end()
+					? 0u : materialSlot->second,
+				.resolutionX = gpu.resolution.x,
+				.resolutionY = gpu.resolution.y,
+			};
+			commands.SetBindings(
+				clothGraphicsPipeline_, 2, gpu.renderBindings[gpu.currentState]);
+			commands.PushConstants(
+				ShaderStage::Vertex | ShaderStage::Fragment,
+				0, sizeof(constants), &constants);
+			commands.BindIndexBuffer(gpu.indexBuffer, IndexType::U32);
+			commands.DrawIndexed(gpu.indexCount);
+		}
 	}
 
 	Renderer::UploadBackedBuffer Renderer::CreateUploadBackedBuffer(
@@ -595,25 +947,26 @@ namespace Iryven {
 
 	void Renderer::UploadMaterials(
 		Velos::RHI::ICommandList& commands,
-		const std::vector<RenderObject>& objects)
+		const RenderScene& scene)
 	{
 		materialSlots_.clear();
 		std::vector<GpuMaterial> materials;
-		materials.reserve(std::min<std::size_t>(objects.size() + 1, k_MaxMaterials));
+		materials.reserve(std::min<std::size_t>(
+			scene.objects.size() + scene.cloths.size() + 1, k_MaxMaterials));
 		materials.emplace_back(); // Slot 0 is the default white material.
 
-		for (const RenderObject& object : objects) {
-			if (!object.material) continue;
+		const auto appendMaterial = [this, &materials](
+			const ModelHandle& model, const MaterialHandle& material) {
+			if (!material) return;
 			const MaterialSlotKey key{
-				.model = object.model.get(),
-				.material = object.material.get()
+				.model = model.get(),
+				.material = material.get()
 			};
-			if (materialSlots_.contains(key)) continue;
+			if (materialSlots_.contains(key)) return;
 			if (materials.size() >= k_MaxMaterials)
 				throw std::runtime_error("Renderer material table exceeded its 1024 material capacity");
 
-			GpuModel* gpuModel = object.model
-				? ResolveOrCreateModel(object.model) : nullptr;
+			GpuModel* gpuModel = model ? ResolveOrCreateModel(model) : nullptr;
 			const auto resolveTextureIndex = [&](std::uint32_t localIndex) {
 				if (!gpuModel || localIndex == InvalidTextureIndex ||
 					localIndex >= gpuModel->bindlessTextureIndices.size()) {
@@ -625,28 +978,39 @@ namespace Iryven {
 			const std::uint32_t slot = static_cast<std::uint32_t>(materials.size());
 			materialSlots_.emplace(key, slot);
 			std::uint32_t textureFlags = 0;
-			if (object.material->baseColorTexture != InvalidTextureIndex) textureFlags |= 1u;
-			if (object.material->metallicRoughnessTexture != InvalidTextureIndex) textureFlags |= 2u;
-			if (object.material->normalTexture != InvalidTextureIndex) textureFlags |= 4u;
-			if (object.material->occlusionTexture != InvalidTextureIndex) textureFlags |= 8u;
-			if (object.material->emissiveTexture != InvalidTextureIndex) textureFlags |= 16u;
+			// Texture indices are local to a model's texture registry. Standalone
+			// cloth materials therefore use their scalar factors only.
+			if (gpuModel) {
+				if (material->baseColorTexture != InvalidTextureIndex) textureFlags |= 1u;
+				if (material->metallicRoughnessTexture != InvalidTextureIndex) textureFlags |= 2u;
+				if (material->normalTexture != InvalidTextureIndex) textureFlags |= 4u;
+				if (material->occlusionTexture != InvalidTextureIndex) textureFlags |= 8u;
+				if (material->emissiveTexture != InvalidTextureIndex) textureFlags |= 16u;
+			}
 			materials.push_back(GpuMaterial{
-				.baseColorFactor = object.material->baseColor.Vector(),
-				.emissiveFactor = object.material->emissive.Vector(),
+				.baseColorFactor = material->baseColor.Vector(),
+				.emissiveFactor = material->emissive.Vector(),
 				.metallicRoughnessNormal = glm::vec4(
-					object.material->metallic,
-					object.material->roughness,
-					object.material->normalScale,
-					object.material->occlusionStrength),
+					material->metallic,
+					material->roughness,
+					material->normalScale,
+					material->occlusionStrength),
 				.textureIndices0 = glm::uvec4(
-					resolveTextureIndex(object.material->baseColorTexture),
-					resolveTextureIndex(object.material->metallicRoughnessTexture),
-					resolveTextureIndex(object.material->normalTexture),
-					resolveTextureIndex(object.material->occlusionTexture)),
+					resolveTextureIndex(material->baseColorTexture),
+					resolveTextureIndex(material->metallicRoughnessTexture),
+					resolveTextureIndex(material->normalTexture),
+					resolveTextureIndex(material->occlusionTexture)),
 				.textureIndices1 = glm::uvec4(
-					resolveTextureIndex(object.material->emissiveTexture),
+					resolveTextureIndex(material->emissiveTexture),
 					textureFlags, 0u, 0u),
 			});
+		};
+
+		for (const RenderObject& object : scene.objects) {
+			appendMaterial(object.model, object.material);
+		}
+		for (const RenderCloth& cloth : scene.cloths) {
+			appendMaterial({}, cloth.material);
 		}
 
 		UploadBuffer(
@@ -835,6 +1199,129 @@ namespace Iryven {
 			.debugName = "Iryven glTF pipeline",
 		});
 
+		const auto clothVertexShader = Velos::ShaderCompiler::CompileFile({
+			.path = "assets/shaders/internal/cloth.vert.spv",
+			.stage = Velos::RHI::ShaderStage::Vertex,
+			.entryPoint = "main",
+			.language = Velos::ShaderSourceLanguage::SpirvBinary,
+		});
+		clothVertexShader_ = device_->CreateShader({
+			.stage = Velos::RHI::ShaderStage::Vertex,
+			.bytecode = clothVertexShader.spirv.data(),
+			.bytecodeSize = static_cast<Velos::u64>(
+				clothVertexShader.spirv.size() * sizeof(std::uint32_t)),
+			.entryPoint = "main",
+			.reflection = clothVertexShader.reflection,
+			.debugName = "Iryven cloth vertex shader",
+		});
+		const std::array clothGraphicsReflections{
+			clothVertexShader.reflection,
+			gltfFragmentShader.reflection,
+		};
+		const auto clothGraphicsReflection =
+			Velos::ShaderCompiler::MergeShaderReflection(clothGraphicsReflections);
+		const Velos::PipelineLayoutOverrides clothGraphicsOverrides{
+			.existingSetLayouts = {
+				{0, lightsBindingLayout_},
+				{1, bindlessTextureManager_->Layout()},
+			},
+		};
+		clothGraphicsGeneratedLayout_ = device_->BuildPipelineLayout(
+			clothGraphicsReflection, clothGraphicsOverrides);
+		if (clothGraphicsGeneratedLayout_.setLayouts.size() != 3) {
+			throw std::runtime_error(
+				"Reflected cloth pipeline must contain descriptor sets 0, 1, and 2");
+		}
+		clothRenderBindingLayout_ = clothGraphicsGeneratedLayout_.setLayouts[2];
+		clothGraphicsPipeline_ = device_->CreateGraphicsPipeline({
+			.vertexShader = clothVertexShader_,
+			.fragmentShader = gltfFragmentShader_,
+			.layout = {
+				.descriptorSetLayouts =
+					clothGraphicsGeneratedLayout_.setLayouts.data(),
+				.descriptorSetLayoutCount = static_cast<Velos::u32>(
+					clothGraphicsGeneratedLayout_.setLayouts.size()),
+			},
+			.topology = Velos::RHI::PrimitiveTopology::TriangleList,
+			.raster = {
+				.cullBackFaces = false,
+				.frontFaceCCW = true,
+				.wireframe = false,
+			},
+			.depth = {
+				.depthTestEnable = true,
+				.depthWriteEnable = true,
+				.depthFormat = Velos::RHI::Format::D32_FLOAT,
+			},
+			.colorFormat = Velos::RHI::Format::BGRA8_UNORM,
+			.debugName = "Iryven cloth graphics pipeline",
+		});
+
+		const std::filesystem::path clothComputePath =
+			"assets/shaders/internal/cloth.comp.spv";
+		if (std::filesystem::exists(clothComputePath)) {
+			const auto clothComputeShader = Velos::ShaderCompiler::CompileFile({
+				.path = clothComputePath.string(),
+				.stage = Velos::RHI::ShaderStage::Compute,
+				.entryPoint = "main",
+				.language = Velos::ShaderSourceLanguage::SpirvBinary,
+			});
+			const auto hasStorageBuffer = [&clothComputeShader](
+				std::uint32_t binding) {
+				return std::any_of(
+					clothComputeShader.reflection.resources.begin(),
+					clothComputeShader.reflection.resources.end(),
+					[binding](const Velos::ShaderResourceBinding& resource) {
+						return resource.set == 0 && resource.binding == binding &&
+							resource.type == Velos::ShaderResourceType::StorageBuffer;
+					});
+			};
+			const bool validPushConstants =
+				clothComputeShader.reflection.pushConstants.size() == 1 &&
+				clothComputeShader.reflection.pushConstants[0].offset == 0 &&
+				clothComputeShader.reflection.pushConstants[0].size ==
+					sizeof(ClothSimulationConstants);
+			if (clothComputeShader.reflection.resources.size() != 2 ||
+				!hasStorageBuffer(0) || !hasStorageBuffer(1) ||
+				!validPushConstants) {
+				throw std::runtime_error(
+					"Cloth compute shader must declare storage buffers at set 0 "
+					"bindings 0 and 1, plus the 64-byte cloth push constants");
+			}
+			clothComputeShader_ = device_->CreateShader({
+				.stage = Velos::RHI::ShaderStage::Compute,
+				.bytecode = clothComputeShader.spirv.data(),
+				.bytecodeSize = static_cast<Velos::u64>(
+					clothComputeShader.spirv.size() * sizeof(std::uint32_t)),
+				.entryPoint = "main",
+				.reflection = clothComputeShader.reflection,
+				.debugName = "Iryven cloth compute shader",
+			});
+			const std::array clothComputeReflections{
+				clothComputeShader.reflection,
+			};
+			const auto clothComputeReflection =
+				Velos::ShaderCompiler::MergeShaderReflection(clothComputeReflections);
+			clothComputeGeneratedLayout_ =
+				device_->BuildPipelineLayout(clothComputeReflection);
+			if (clothComputeGeneratedLayout_.setLayouts.size() != 1) {
+				throw std::runtime_error(
+					"Cloth compute shader must use descriptor set 0 only");
+			}
+			clothSimulationBindingLayout_ =
+				clothComputeGeneratedLayout_.setLayouts[0];
+			clothComputePipeline_ = device_->CreateComputePipeline({
+				.computeShader = clothComputeShader_,
+				.layout = {
+					.descriptorSetLayouts =
+						clothComputeGeneratedLayout_.setLayouts.data(),
+					.descriptorSetLayoutCount = static_cast<Velos::u32>(
+						clothComputeGeneratedLayout_.setLayouts.size()),
+				},
+				.debugName = "Iryven cloth compute pipeline",
+			});
+		}
+
 		const auto textVertexShader = Velos::ShaderCompiler::CompileFile({
 			.path = "assets/shaders/internal/ui_text.vert.spv",
 			.stage = Velos::RHI::ShaderStage::Vertex,
@@ -946,6 +1433,22 @@ namespace Iryven {
 
 	void Renderer::DestroyPipelineResources()
 	{
+		if (clothComputePipeline_) {
+			device_->DestroyPipeline(clothComputePipeline_);
+			clothComputePipeline_ = {};
+		}
+		if (clothComputeShader_) {
+			device_->DestroyShader(clothComputeShader_);
+			clothComputeShader_ = {};
+		}
+		if (clothGraphicsPipeline_) {
+			device_->DestroyPipeline(clothGraphicsPipeline_);
+			clothGraphicsPipeline_ = {};
+		}
+		if (clothVertexShader_) {
+			device_->DestroyShader(clothVertexShader_);
+			clothVertexShader_ = {};
+		}
 		if (textPipeline_) {
 			device_->DestroyPipeline(textPipeline_);
 			textPipeline_ = {};
@@ -1340,6 +1843,19 @@ namespace Iryven {
 		}
 	}
 
+	void Renderer::CollectRetiredCloths(std::uint64_t completedSubmission)
+	{
+		auto it = retiredCloths_.begin();
+		while (it != retiredCloths_.end()) {
+			if (it->retirementSubmission > completedSubmission) {
+				++it;
+				continue;
+			}
+			DestroyGpuCloth(it->resources);
+			it = retiredCloths_.erase(it);
+		}
+	}
+
 	void Renderer::DestroyGpuModel(GpuModel& model)
 	{
 		for (const auto sampler : model.samplers) device_->DestroySampler(sampler);
@@ -1347,6 +1863,16 @@ namespace Iryven {
 		for (const auto image : model.textureImages) device_->DestroyImage(image);
 		device_->DestroyBuffer(model.indexBuffer);
 		device_->DestroyBuffer(model.vertexBuffer);
+	}
+
+	void Renderer::DestroyGpuCloth(GpuCloth& cloth)
+	{
+		if (cloth.bindingPool) device_->DestroyBindingPool(cloth.bindingPool);
+		if (cloth.indexBuffer) device_->DestroyBuffer(cloth.indexBuffer);
+		for (BufferHandle buffer : cloth.particleBuffers) {
+			if (buffer) device_->DestroyBuffer(buffer);
+		}
+		cloth = {};
 	}
 
 	void Renderer::CollectUnusedFonts()
@@ -1478,6 +2004,16 @@ namespace Iryven {
 		}
 		fontBindingLayout_ = {};
 		lightsBindingLayout_ = {};
+		clothSimulationBindingLayout_ = {};
+		clothRenderBindingLayout_ = {};
+		for (const auto layout : clothComputeGeneratedLayout_.ownedSetLayouts) {
+			device_->DestroyBindingLayout(layout);
+		}
+		clothComputeGeneratedLayout_ = {};
+		for (const auto layout : clothGraphicsGeneratedLayout_.ownedSetLayouts) {
+			device_->DestroyBindingLayout(layout);
+		}
+		clothGraphicsGeneratedLayout_ = {};
 		for (const auto layout : textGeneratedLayout_.ownedSetLayouts) {
 			device_->DestroyBindingLayout(layout);
 		}

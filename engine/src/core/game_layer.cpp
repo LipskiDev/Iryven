@@ -27,6 +27,7 @@ const World& GameLayer::GetWorld() const noexcept
 
 void GameLayer::OnUpdate(float deltaTime)
 {
+    simulationDeltaTime_ = simulationEnabled_ ? deltaTime : 0.0f;
     if (simulationEnabled_) world_->Progress(deltaTime);
 }
 
@@ -40,6 +41,7 @@ void GameLayer::OnRender(RenderContext& context)
 
     const auto extractionStart = Clock::now();
     RenderScene scene = world_->ExtractRenderScene();
+    scene.deltaTime = simulationDeltaTime_;
     sceneExtractionMs_ = elapsedMilliseconds(extractionStart);
 
     const auto drawStart = Clock::now();

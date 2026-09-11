@@ -187,7 +187,7 @@ int main()
 	auto sponzaEntity = engine.GetWorld().CreateEntity("Sponza");
 	sponzaEntity.Add<Iryven::Transform>(Iryven::Transform{
 	});
-	sponzaEntity.Add<Iryven::MeshRenderer>(sponzaAsset);
+	//sponzaEntity.Add<Iryven::MeshRenderer>(sponzaAsset);
 
 	Iryven::World& world = engine.GetWorld();
 	Iryven::InputHandler& input = engine.GetInput();
@@ -212,6 +212,19 @@ int main()
 		.color = Iryven::Color::White,
 		.intensity = 10.5f,
 		.range = 10.0,
+	});
+
+	auto cloth = world.CreateEntity("Cloth");
+	cloth.Add<Iryven::Transform>(Iryven::Transform{
+		.position = glm::vec3{0.0f, 2.0f, -3.0f},
+	});
+	cloth.Add<Iryven::Cloth>(Iryven::Cloth{
+		.resolution = {32u, 32u},
+		.size = {2.0f, 2.0f},
+		.stiffness = 0.1f,
+		.damping = 0.01f,
+		.material = MakeMaterial(
+			"Cloth", Iryven::Color{0.65f, 0.08f, 0.06f, 1.0f}, 0.75f),
 	});
 
 	world.AddSystem<Iryven::Camera, Iryven::Transform, CameraMotion>("Camera Control", [&](float deltaTime, Iryven::Camera&, Iryven::Transform& transform, CameraMotion& motion) {

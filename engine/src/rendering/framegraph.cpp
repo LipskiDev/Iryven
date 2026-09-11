@@ -435,8 +435,7 @@ FrameGraphResourceHandle FrameGraphBuilder::CreateNodeOutput(
     if (resources_.size() >= kMaxResources) {
         throw std::length_error("Frame-graph resource capacity exceeded");
     }
-    if (creation.type != FrameGraphResourceType::Reference &&
-        resourceMap_.contains(creation.name)) {
+    if (resourceMap_.contains(creation.name)) {
         throw std::invalid_argument("Duplicate frame-graph output: " + creation.name);
     }
 
@@ -453,9 +452,7 @@ FrameGraphResourceHandle FrameGraphBuilder::CreateNodeOutput(
         .name = creation.name,
     });
 
-    if (creation.type != FrameGraphResourceType::Reference) {
-        resourceMap_.emplace(creation.name, handle);
-    }
+    resourceMap_.emplace(creation.name, handle);
     return handle;
 }
 
@@ -505,9 +502,8 @@ FrameGraphNodeHandle FrameGraphBuilder::CreateNode(
     outputNames.reserve(creation.outputs.size());
     for (const auto& output : creation.outputs) {
         ValidateOutput(output);
-        if (output.type != FrameGraphResourceType::Reference &&
-            (resourceMap_.contains(output.name) ||
-             !outputNames.emplace(output.name).second)) {
+        if (resourceMap_.contains(output.name) ||
+            !outputNames.emplace(output.name).second) {
             throw std::invalid_argument("Duplicate frame-graph output: " + output.name);
         }
     }
@@ -756,20 +752,32 @@ void FrameGraph::Compile()
                                        input->name + "'");
             }
 
-            if (parent->queue != child->queue &&
+            const Velos::RHI::QueueRelationship queueRelationship =
+                QueueRelationship(parent->queue, child->queue);
+            if (queueRelationship ==
+                    Velos::RHI::QueueRelationship::DifferentFamily &&
                 output->type != FrameGraphResourceType::Reference) {
                 if (output->external && !IsConcurrent(output->info)) {
                     throw std::logic_error(
                         "External resource '" + output->name +
-                        "' crosses frame-graph queues but was not declared "
+                        "' crosses frame-graph queue families but was not declared "
                         "concurrentQueues");
                 }
                 EnableConcurrentQueues(output->info);
             }
 
+            const auto requestedTexture =
+                std::get_if<FrameGraphTextureInfo>(&input->info);
+            const RenderPassOperation requestedLoadOp = requestedTexture
+                ? requestedTexture->loadOp : RenderPassOperation::DontCare;
             input->producer = output->producer;
             input->outputHandle = output->outputHandle;
             input->info = output->info;
+            if (auto* texture = std::get_if<FrameGraphTextureInfo>(&input->info);
+                texture != nullptr &&
+                requestedLoadOp != RenderPassOperation::DontCare) {
+                texture->loadOp = requestedLoadOp;
+            }
             input->external = output->external;
             input->access = ResolveAccess(input->access, input->type,
                                           input->info, true, child->queue);
@@ -836,7 +844,8 @@ void FrameGraph::Compile()
     for (FrameGraphNodeHandle handle : executionOrder_) {
         const FrameGraphNode* node = AccessNode(handle);
         if (executionBatches_.empty() ||
-            executionBatches_.back().queue != node->queue) {
+            QueueRelationship(executionBatches_.back().queue, node->queue) !=
+                Velos::RHI::QueueRelationship::SameQueue) {
             executionBatches_.push_back({ .queue = node->queue });
         }
         nodeBatches[handle.handle] = executionBatches_.size() - 1;
@@ -869,6 +878,19 @@ void FrameGraph::AddUI()
 void FrameGraph::BeginFrame()
 {
     graphicsSubmissionWaits_.clear();
+}
+
+Velos::RHI::QueueRelationship FrameGraph::QueueRelationship(
+    Velos::RHI::QueueType first, Velos::RHI::QueueType second) const
+{
+    if (first == second) return Velos::RHI::QueueRelationship::SameQueue;
+
+    // Structural frame-graph tests can compile a graph without initializing an
+    // RHI device. In that case logical queues remain distinct.
+    if (builder_ == nullptr || builder_->device_ == nullptr) {
+        return Velos::RHI::QueueRelationship::DifferentFamily;
+    }
+    return builder_->Device().GetQueueRelationship(first, second);
 }
 
 FrameGraph::QueueTimelineState& FrameGraph::TimelineFor(
@@ -956,7 +978,8 @@ void FrameGraph::RecordBatch(
                 }
 
                 const bool sameQueue = tracked.initialized &&
-                                       tracked.queue == node->queue;
+                    QueueRelationship(tracked.queue, node->queue) ==
+                        Velos::RHI::QueueRelationship::SameQueue;
                 if (sameQueue &&
                     (tracked.access != use.access ||
                      AccessWrites(tracked.access) || AccessWrites(use.access))) {
@@ -1003,7 +1026,8 @@ void FrameGraph::RecordBatch(
             }
 
             const bool sameQueue = tracked.initialized &&
-                                   tracked.queue == node->queue;
+                QueueRelationship(tracked.queue, node->queue) ==
+                    Velos::RHI::QueueRelationship::SameQueue;
             const bool layoutChange = actualLayout != desiredLayout;
             const bool memoryHazard = sameQueue &&
                 (tracked.access != use.access ||
@@ -1030,10 +1054,13 @@ void FrameGraph::RecordBatch(
             tracked.initialized = true;
         };
 
-        const auto addAttachment = [&](const FrameGraphResource& resource) {
+        const auto addAttachment = [&](const FrameGraphResource& use,
+                                       const FrameGraphResource& resource) {
             const auto* texture = std::get_if<FrameGraphTextureInfo>(&resource.info);
-            if (texture == nullptr || !texture->view.IsValid()) {
-                throw std::logic_error("Attachment '" + resource.name +
+            const auto* useTexture = std::get_if<FrameGraphTextureInfo>(&use.info);
+            if (texture == nullptr || useTexture == nullptr ||
+                !texture->view.IsValid()) {
+                throw std::logic_error("Attachment '" + use.name +
                                        "' has no valid image view");
             }
             if (renderWidth != 0 &&
@@ -1050,10 +1077,10 @@ void FrameGraph::RecordBatch(
                                            "' has multiple depth attachments");
                 }
                 depthAttachment.view = texture->view;
-                depthAttachment.loadOp = ToLoadOp(texture->loadOp);
+                depthAttachment.loadOp = ToLoadOp(useTexture->loadOp);
                 depthAttachment.storeOp = Velos::RHI::StoreOp::Store;
-                depthAttachment.clearDepth = texture->clearDepth;
-                depthAttachment.clearStencil = texture->clearStencil;
+                depthAttachment.clearDepth = useTexture->clearDepth;
+                depthAttachment.clearStencil = useTexture->clearStencil;
                 hasDepthAttachment = true;
             } else {
                 if (hasColorAttachment) {
@@ -1061,9 +1088,9 @@ void FrameGraph::RecordBatch(
                         "Velos currently supports one color attachment per pass");
                 }
                 colorAttachment.view = texture->view;
-                colorAttachment.loadOp = ToLoadOp(texture->loadOp);
+                colorAttachment.loadOp = ToLoadOp(useTexture->loadOp);
                 colorAttachment.storeOp = Velos::RHI::StoreOp::Store;
-                colorAttachment.clearValue = texture->clearColor;
+                colorAttachment.clearValue = useTexture->clearColor;
                 hasColorAttachment = true;
             }
         };
@@ -1078,7 +1105,7 @@ void FrameGraph::RecordBatch(
                 transition(*input, *resource);
             }
             if (input->type == FrameGraphResourceType::Attachment) {
-                addAttachment(*resource);
+                addAttachment(*input, *resource);
             }
         }
 
@@ -1088,7 +1115,7 @@ void FrameGraph::RecordBatch(
                 transition(*output, *output);
             }
             if (output->type == FrameGraphResourceType::Attachment) {
-                addAttachment(*output);
+                addAttachment(*output, *output);
             }
         }
 
@@ -1183,7 +1210,9 @@ void FrameGraph::Render(const RenderScene& scene)
                 throw std::logic_error(
                     "Frame-graph queue dependency was not submitted");
             }
-            if (executionBatches_[dependency].queue != batch.queue) {
+            if (QueueRelationship(executionBatches_[dependency].queue,
+                                  batch.queue) !=
+                Velos::RHI::QueueRelationship::SameQueue) {
                 appendWait(batchSignals[dependency]);
             }
         }
@@ -1221,7 +1250,9 @@ void FrameGraph::Render(const RenderScene& scene)
 
         visitBatchResources([this, &batch, &appendWait](std::uint32_t stateIndex) {
             const TrackedResourceState& state = resourceStates_[stateIndex];
-            if (state.initialized && state.queue != batch.queue &&
+            if (state.initialized &&
+                QueueRelationship(state.queue, batch.queue) !=
+                    Velos::RHI::QueueRelationship::SameQueue &&
                 state.completion.semaphore.IsValid()) {
                 appendWait(state.completion);
             }
@@ -1269,8 +1300,9 @@ void FrameGraph::Render(const RenderScene& scene)
 
     for (std::size_t batchIndex = 0;
          batchIndex < executionBatches_.size(); ++batchIndex) {
-        if (executionBatches_[batchIndex].queue !=
-            Velos::RHI::QueueType::Graphics) {
+        if (QueueRelationship(executionBatches_[batchIndex].queue,
+                              Velos::RHI::QueueType::Graphics) !=
+            Velos::RHI::QueueRelationship::SameQueue) {
             appendGraphicsWait(batchSignals[batchIndex]);
         }
     }

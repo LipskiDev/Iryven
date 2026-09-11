@@ -137,6 +137,13 @@ int main()
         probe.Add<Iryven::Transform>(Iryven::Transform{.position = {3, 4, 5}});
         probe.Add<Iryven::Camera>(Iryven::Camera{.verticalFov = 75});
         probe.Add<Iryven::Light>(Iryven::Light{.intensity = 7});
+        probe.Add<Iryven::Cloth>(Iryven::Cloth{
+            .resolution = {12u, 8u},
+            .size = {3.0f, 2.0f},
+            .mass = 2.0f,
+            .solverIterations = 5,
+            .pinTopRight = false,
+        });
         const auto probeMesh = Iryven::PrimitiveMeshes::Cube();
         probe.Add<Iryven::MeshRenderer>(probeMesh);
         const auto path = std::filesystem::temp_directory_path() /
@@ -159,6 +166,11 @@ int main()
         assert(loadedProbe.Get<Iryven::Transform>().position == glm::vec3(3, 4, 5));
         assert(loadedProbe.Get<Iryven::Camera>().verticalFov == 75);
         assert(loadedProbe.Get<Iryven::Light>().intensity == 7);
+        assert(loadedProbe.Get<Iryven::Cloth>().resolution == glm::uvec2(12u, 8u));
+        assert(loadedProbe.Get<Iryven::Cloth>().size == glm::vec2(3.0f, 2.0f));
+        assert(loadedProbe.Get<Iryven::Cloth>().mass == 2.0f);
+        assert(loadedProbe.Get<Iryven::Cloth>().solverIterations == 5);
+        assert(!loadedProbe.Get<Iryven::Cloth>().pinTopRight);
         assert(loadedProbe.Get<Iryven::MeshRenderer>().mesh == probeMesh);
         loadedScene.SerializeScene(path);
         std::ifstream loadedFile(path, std::ios::binary);
@@ -229,6 +241,56 @@ int main()
         assert(output != nullptr && output->referenceCount == 1);
         assert(input != nullptr && input->producer == output->producer);
         assert(input->outputHandle == output->outputHandle);
+
+		graph.Reset();
+		graph.AddNode({
+			.name = "cloth-simulate",
+			.outputs = {{
+				.type = Iryven::FrameGraphResourceType::Reference,
+				.name = "cloth-complete",
+			}},
+			.queue = Velos::RHI::QueueType::Compute,
+		});
+		graph.AddNode({
+			.name = "cloth-draw",
+			.inputs = {{
+				.type = Iryven::FrameGraphResourceType::Reference,
+				.name = "cloth-complete",
+			}},
+		});
+		graph.Compile();
+		assert(graph.ExecutionOrder().size() == 2);
+		assert(graph.AccessNode(graph.ExecutionOrder()[0])->name ==
+			"cloth-simulate");
+		assert(graph.AccessNode(graph.ExecutionOrder()[1])->name == "cloth-draw");
+
+		graph.Reset();
+		graph.AddNode({
+			.name = "attachment-producer",
+			.outputs = {{
+				.type = Iryven::FrameGraphResourceType::Attachment,
+				.info = textureInfo,
+				.external = true,
+				.name = "loaded-attachment",
+			}},
+		});
+		graph.AddNode({
+			.name = "attachment-consumer",
+			.inputs = {{
+				.type = Iryven::FrameGraphResourceType::Attachment,
+				.access = Iryven::FrameGraphAccess::ColorAttachmentReadWrite,
+				.info = Iryven::FrameGraphTextureInfo{
+					.loadOp = Iryven::RenderPassOperation::Load,
+				},
+				.name = "loaded-attachment",
+			}},
+		});
+		graph.Compile();
+		const auto* attachmentConsumer = graph.GetNode("attachment-consumer");
+		const auto* attachmentInput = graph.AccessResource(
+			attachmentConsumer->inputs.front());
+		assert(std::get<Iryven::FrameGraphTextureInfo>(attachmentInput->info)
+			.loadOp == Iryven::RenderPassOperation::Load);
 
         graph.Reset();
         graph.AddNode({
@@ -381,14 +443,28 @@ int main()
             .queue = Velos::RHI::QueueType::Compute,
         });
         graph.Compile();
+        const auto queueRelationship = device->GetQueueRelationship(
+            Velos::RHI::QueueType::Graphics,
+            Velos::RHI::QueueType::Compute);
         const auto* simulation = graph.GetResource("simulation");
         assert(simulation != nullptr);
         assert(std::get<Iryven::FrameGraphBufferInfo>(simulation->info)
-                   .concurrentQueues);
+                   .concurrentQueues ==
+               (queueRelationship ==
+                Velos::RHI::QueueRelationship::DifferentFamily));
+
+        const auto batches = graph.ExecutionBatches();
+        assert(batches.size() ==
+               (queueRelationship == Velos::RHI::QueueRelationship::SameQueue
+                    ? 1u
+                    : 3u));
 
         graph.BeginFrame();
         graph.Render({});
-        assert(graph.GraphicsSubmissionWaits().size() == 1);
+        assert(graph.GraphicsSubmissionWaits().size() ==
+               (queueRelationship == Velos::RHI::QueueRelationship::SameQueue
+                    ? 0u
+                    : 1u));
         assert(computeRenderCount == 1);
         assert(graphicsRenderCount == 1);
         assert(postRenderCount == 1);
@@ -400,14 +476,102 @@ int main()
 
         graph.BeginFrame();
         graph.Render({});
-        assert(graph.GraphicsSubmissionWaits().size() == 1);
+        assert(graph.GraphicsSubmissionWaits().size() ==
+               (queueRelationship == Velos::RHI::QueueRelationship::SameQueue
+                    ? 0u
+                    : 1u));
         device->WaitIdle();
         assert(computeRenderCount == 2);
         assert(graphicsRenderCount == 2);
         assert(postRenderCount == 2);
 
+		{
+			const auto concurrentBuffer = device->CreateBuffer({
+				.size = sizeof(std::uint32_t),
+				.usage = Velos::RHI::BufferUsage::Storage |
+					Velos::RHI::BufferUsage::TransferDst,
+				.memoryUsage = Velos::RHI::MemoryUsage::GPUOnly,
+				.concurrentQueues = true,
+				.debugName = "Concurrent upload test buffer",
+			});
+			const std::uint32_t uploadValue = 42;
+			auto upload = device->CreateUploadContext(sizeof(uploadValue));
+			upload->Begin();
+			upload->UploadBuffer({
+				.dstBuffer = concurrentBuffer,
+				.size = sizeof(uploadValue),
+				.data = &uploadValue,
+				.finalState = Velos::RHI::ResourceState::ShaderRead,
+			});
+			upload->Flush();
+			assert(upload->TakePendingBufferAcquires().empty());
+			device->DestroyBuffer(concurrentBuffer);
+		}
+
+		graph.Reset();
+		int attachmentProducerCount = 0;
+		int attachmentConsumerCount = 0;
+		CountingFrameGraphPass attachmentProducer(attachmentProducerCount);
+		CountingFrameGraphPass attachmentConsumer(attachmentConsumerCount);
+		builder.RegisterRenderPass("attachment-producer", attachmentProducer);
+		builder.RegisterRenderPass("attachment-consumer", attachmentConsumer);
+		graph.AddNode({
+			.name = "attachment-producer",
+			.outputs = {{
+				.type = Iryven::FrameGraphResourceType::Attachment,
+				.access = Iryven::FrameGraphAccess::ColorAttachmentWrite,
+				.info = Iryven::FrameGraphTextureInfo{
+					.width = 16,
+					.height = 16,
+					.format = Velos::RHI::Format::RGBA8_UNORM,
+					.usage = Velos::RHI::ImageUsage::ColorAttachment,
+					.loadOp = Iryven::RenderPassOperation::Clear,
+				},
+				.external = true,
+				.name = "live-attachment",
+			}},
+		});
+		graph.AddNode({
+			.name = "attachment-consumer",
+			.inputs = {{
+				.type = Iryven::FrameGraphResourceType::Attachment,
+				.access = Iryven::FrameGraphAccess::ColorAttachmentReadWrite,
+				.info = Iryven::FrameGraphTextureInfo{
+					.loadOp = Iryven::RenderPassOperation::Load,
+				},
+				.name = "live-attachment",
+			}},
+		});
+		graph.Compile();
+
+		const auto attachmentImage = device->CreateImage({
+			.width = 16,
+			.height = 16,
+			.format = Velos::RHI::Format::RGBA8_UNORM,
+			.usage = Velos::RHI::ImageUsage::ColorAttachment,
+			.debugName = "Frame graph live attachment test image",
+		});
+		const auto attachmentView = device->CreateImageView({
+			.image = attachmentImage,
+			.format = Velos::RHI::Format::RGBA8_UNORM,
+			.aspect = Velos::RHI::ImageAspect::Color,
+			.debugName = "Frame graph live attachment test view",
+		});
+		auto& liveAttachment = std::get<Iryven::FrameGraphTextureInfo>(
+			graph.GetResource("live-attachment")->info);
+		liveAttachment.handle = attachmentImage;
+		liveAttachment.view = attachmentView;
+
+		graph.BeginFrame();
+		graph.Render({});
+		device->WaitIdle();
+		assert(attachmentProducerCount == 1);
+		assert(attachmentConsumerCount == 1);
+
         graph.Shutdown();
         builder.Shutdown();
+		device->DestroyImageView(attachmentView);
+		device->DestroyImage(attachmentImage);
         device.reset();
         glfwTerminate();
     }
@@ -424,8 +588,15 @@ int main()
 		.entryPoint = "main",
 		.language = Velos::ShaderSourceLanguage::GLSL,
 	});
+	const auto clothVertexShader = Velos::ShaderCompiler::CompileFile({
+		.path = "assets/shaders/internal/cloth.vert",
+		.stage = Velos::RHI::ShaderStage::Vertex,
+		.entryPoint = "main",
+		.language = Velos::ShaderSourceLanguage::GLSL,
+	});
 	assert(!bindlessVertexShader.spirv.empty());
 	assert(!bindlessFragmentShader.spirv.empty());
+	assert(!clothVertexShader.spirv.empty());
 
     const auto texture = std::make_shared<const Iryven::Texture>(Iryven::Texture{
         .width = 1,
@@ -466,6 +637,18 @@ int main()
     assert(extractedModelScene.objects.size() == 1);
     assert(extractedModelScene.objects.front().model == model);
     assert(extractedModelScene.objects.front().indexCount == 3);
+
+	auto clothEntity = modelWorld.CreateEntity("Cloth");
+	clothEntity.Add<Iryven::Transform>();
+	clothEntity.Add<Iryven::Cloth>(Iryven::Cloth{
+		.resolution = {16u, 10u},
+		.size = {4.0f, 2.0f},
+	});
+	const Iryven::RenderScene extractedClothScene =
+		modelWorld.ExtractRenderScene();
+	assert(extractedClothScene.cloths.size() == 1);
+	assert(extractedClothScene.cloths.front().id == clothEntity.GetId());
+	assert(extractedClothScene.cloths.front().resolution == glm::uvec2(16u, 10u));
 
     Iryven::AssetManager gltfAssets;
     const Iryven::ModelHandle gltfModel = gltfAssets.LoadModel("tests/assets/basic_triangle.gltf");

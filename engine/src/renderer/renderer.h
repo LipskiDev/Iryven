@@ -18,6 +18,9 @@
 #include <iryven/renderer/asset_upload_queue.h>
 
 namespace Iryven {
+
+	using namespace Velos::RHI;
+
     class ImGuiRenderer;
 
 	struct RendererCpuTimings {
@@ -67,9 +70,14 @@ namespace Iryven {
 		void UploadFrameData(Velos::RHI::ICommandList& commands,
 			const FrameData& frameData);
 		void UploadMaterials(Velos::RHI::ICommandList& commands,
-			const std::vector<RenderObject>& objects);
+			const RenderScene& scene);
 		[[nodiscard]] FrameData BuildFrameData(
 			const RenderCamera& camera) const;
+		void PrepareCloths(const RenderScene& scene);
+		void SimulateCloths(Velos::RHI::ICommandList& commands,
+			const RenderScene& scene);
+		void DrawCloths(Velos::RHI::ICommandList& commands,
+			const RenderScene& scene);
 
 		void CreatePipelineResources();
 		void DestroyPipelineResources();
@@ -78,6 +86,7 @@ namespace Iryven {
 		void DestroyMeshResources();
 		void CollectUnusedMeshes();
 		void CollectRetiredModels(std::uint64_t completedSubmission);
+		void CollectRetiredCloths(std::uint64_t completedSubmission);
 		void CollectUnusedFonts();
 		void CreateBufferResources();
 		void DestroyBufferResources();
@@ -94,11 +103,11 @@ namespace Iryven {
 		};
 		struct GpuModel {
 			std::weak_ptr<const Model> source;
-			Velos::RHI::BufferHandle vertexBuffer;
-			Velos::RHI::BufferHandle indexBuffer;
-			std::vector<Velos::RHI::ImageHandle> textureImages;
-			std::vector<Velos::RHI::ImageViewHandle> textureViews;
-			std::vector<Velos::RHI::SamplerHandle> samplers;
+			BufferHandle vertexBuffer;
+			BufferHandle indexBuffer;
+			std::vector<ImageHandle> textureImages;
+			std::vector<ImageViewHandle> textureViews;
+			std::vector<SamplerHandle> samplers;
 			std::vector<BindlessTextureIndex> bindlessTextureIndices;
 		};
 		struct RetiredModel {
@@ -106,29 +115,90 @@ namespace Iryven {
 			std::uint64_t retirementSubmission = 0;
 		};
 
+		struct alignas(16) ClothParticle {
+			glm::vec4 positionAndInverseMass{};
+			glm::vec4 previousPosition{};
+			glm::vec4 normal{};
+		};
+		static_assert(sizeof(ClothParticle) == 48);
+
+		// assets/shaders/internal/cloth.comp contract:
+		//   set 0, binding 0: readonly ClothParticle inputParticles[]
+		//   set 0, binding 1: ClothParticle outputParticles[]
+		//   local_size_x: 64
+		// Integrate copies input to output and advances it. Constraint and normal
+		// phases operate on output so the displayed input buffer is never written
+		// while a previous graphics frame may still be reading it.
+		enum class ClothSimulationPhase : std::uint32_t {
+			Integrate = 0,
+			SolveConstraints = 1,
+			RecalculateNormals = 2,
+		};
+
+		struct alignas(16) ClothSimulationConstants {
+			std::uint32_t resolutionX = 0;
+			std::uint32_t resolutionY = 0;
+			float clothWidth = 0.0f;
+			float clothHeight = 0.0f;
+			float deltaTime = 0.0f;
+			float stiffness = 0.0f;
+			float damping = 0.0f;
+			float gravityScale = 0.0f;
+			std::uint32_t phase = 0;
+			std::uint32_t iteration = 0;
+			std::uint32_t solverIterations = 0;
+			std::uint32_t particleCount = 0;
+			float time = 0.0f;
+			glm::vec3 padding = {};
+		};
+		static_assert(sizeof(ClothSimulationConstants) == 64);
+
+		struct GpuCloth {
+			glm::uvec2 resolution{};
+			glm::vec2 size{};
+			float mass = 1.0f;
+			bool pinTopLeft = true;
+			bool pinTopRight = true;
+			uint32_t particleCount = 0;
+			uint32_t indexCount = 0;
+
+			std::array<BufferHandle, 2> particleBuffers{};
+			uint32_t currentState = 0;
+
+			BufferHandle indexBuffer{};
+			BindingPoolHandle bindingPool{};
+			std::array<BindingSetHandle, 2> simulationBindings{};
+			std::array<BindingSetHandle, 2> renderBindings{};
+			std::uint64_t lastSeenGeneration = 0;
+		};
+		struct RetiredCloth {
+			GpuCloth resources;
+			std::uint64_t retirementSubmission = 0;
+		};
+
 		struct GpuFont {
 			std::weak_ptr<const Font> source;
 
-			Velos::RHI::ImageHandle atlasImage;
-			Velos::RHI::ImageViewHandle atlasView;
-			Velos::RHI::SamplerHandle atlasSampler;
-			Velos::RHI::BindingSetHandle bindingSet;
+			ImageHandle atlasImage;
+			ImageViewHandle atlasView;
+			SamplerHandle atlasSampler;
+			BindingSetHandle bindingSet;
 		};
 
 		struct UploadBackedBuffer {
-			Velos::RHI::BufferHandle gpuBuffer;
-			Velos::RHI::BufferHandle uploadBuffer;
-			Velos::RHI::ResourceState state = Velos::RHI::ResourceState::Undefined;
+			BufferHandle gpuBuffer;
+			BufferHandle uploadBuffer;
+			ResourceState state = ResourceState::Undefined;
 		};
 
 		[[nodiscard]] UploadBackedBuffer CreateUploadBackedBuffer(
 			std::uint64_t size,
-			Velos::RHI::BufferUsage usage,
+			BufferUsage usage,
 			const char* gpuDebugName,
 			const char* uploadDebugName);
 		void DestroyUploadBackedBuffer(UploadBackedBuffer& buffer);
 		void UploadBuffer(
-			Velos::RHI::ICommandList& commands,
+			ICommandList& commands,
 			UploadBackedBuffer& buffer,
 			const void* data,
 			std::uint64_t size,
@@ -137,41 +207,58 @@ namespace Iryven {
 		[[nodiscard]] GpuMesh* ResolveOrCreateMesh(
 			const std::shared_ptr<const MeshData>& mesh);
 		[[nodiscard]] GpuModel* ResolveOrCreateModel(const ModelHandle& model);
+		[[nodiscard]] GpuCloth* ResolveOrCreateCloth(const RenderCloth& cloth);
 		[[nodiscard]] GpuFont* ResolveOrCreateFont(
 			const std::shared_ptr<const Font>& font);
 		void DestroyGpuModel(GpuModel& model);
+		void DestroyGpuCloth(GpuCloth& cloth);
 
 	private:
 		class OpaquePass;
+		class ClothCompute;
+		class ClothDraw;
 
 		Window& window_;
 		AssetUploadQueue& assetUploads_;
 
-		std::unique_ptr<Velos::RHI::IDevice> device_;
+		std::unique_ptr<IDevice> device_;
         std::unique_ptr<ImGuiRenderer> imGui_;
-		Velos::RHI::SwapchainHandle swapchain_;
-		Velos::RHI::FrameBeginResult frame_;
-		Velos::RHI::ImageHandle depthImage_;
-		Velos::RHI::ImageViewHandle depthView_;
+		SwapchainHandle swapchain_;
+		FrameBeginResult frame_;
+		ImageHandle depthImage_;
+		ImageViewHandle depthView_;
 		FrameGraphBuilder frameGraphBuilder_;
 		FrameGraph frameGraph_;
 		RendererCpuTimings cpuTimings_{};
 		std::unique_ptr<OpaquePass> opaquePass_;
+		std::unique_ptr<ClothCompute> clothCompute_;
+		std::unique_ptr<ClothDraw> clothDraw_;
 
 		std::unordered_map<const MeshData*, GpuMesh> meshes_;
 		std::unordered_map<const Font*, GpuFont> fonts_;
 		std::unordered_map<const Model*, GpuModel> models_;
+		std::unordered_map<uint64_t, GpuCloth> cloths_;
 		std::vector<RetiredModel> retiredModels_;
-		Velos::RHI::ShaderHandle gltfVertexShader_;
-		Velos::RHI::ShaderHandle gltfFragmentShader_;
-		Velos::RHI::PipelineHandle gltfPipeline_;
-		Velos::RHI::GeneratedPipelineLayout gltfGeneratedLayout_;
-		Velos::RHI::ShaderHandle textVertexShader_;
-		Velos::RHI::ShaderHandle textFragmentShader_;
-		Velos::RHI::PipelineHandle textPipeline_;
-		Velos::RHI::GeneratedPipelineLayout textGeneratedLayout_;
-		Velos::RHI::BindingLayoutHandle fontBindingLayout_;
-		Velos::RHI::BindingPoolHandle fontBindingPool_;
+		std::vector<RetiredCloth> retiredCloths_;
+		std::uint64_t clothSceneGeneration_ = 0;
+		ShaderHandle gltfVertexShader_;
+		ShaderHandle gltfFragmentShader_;
+		PipelineHandle gltfPipeline_;
+		GeneratedPipelineLayout gltfGeneratedLayout_;
+		ShaderHandle clothVertexShader_;
+		ShaderHandle clothComputeShader_;
+		PipelineHandle clothGraphicsPipeline_;
+		PipelineHandle clothComputePipeline_;
+		GeneratedPipelineLayout clothGraphicsGeneratedLayout_;
+		GeneratedPipelineLayout clothComputeGeneratedLayout_;
+		BindingLayoutHandle clothSimulationBindingLayout_;
+		BindingLayoutHandle clothRenderBindingLayout_;
+		ShaderHandle textVertexShader_;
+		ShaderHandle textFragmentShader_;
+		PipelineHandle textPipeline_;
+		GeneratedPipelineLayout textGeneratedLayout_;
+		BindingLayoutHandle fontBindingLayout_;
+		BindingPoolHandle fontBindingPool_;
 		std::array<std::vector<UploadBackedBuffer>, k_FramesInFlight>
 			textVertexBuffers_;
 
@@ -179,13 +266,13 @@ namespace Iryven {
 			UploadBackedBuffer lightBuffer;
 			UploadBackedBuffer frameDataBuffer;
 			UploadBackedBuffer materialBuffer;
-			Velos::RHI::BindingSetHandle lightBindingSet;
+			BindingSetHandle lightBindingSet;
 		};
 
 		std::array<FrameLightingResource, k_FramesInFlight> lightingFrames_;
 
-		Velos::RHI::BindingLayoutHandle lightsBindingLayout_;
-		Velos::RHI::BindingPoolHandle lightsBindingPool_;
+		BindingLayoutHandle lightsBindingLayout_;
+		BindingPoolHandle lightsBindingPool_;
 		struct MaterialSlotKey {
 			const Model* model = nullptr;
 			const Material* material = nullptr;

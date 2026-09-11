@@ -68,6 +68,7 @@ project "Iryven"
         "external/velos/external/imgui/backends/imgui_impl_vulkan.cpp",
         "assets/shaders/internal/**.vert",
         "assets/shaders/internal/**.frag",
+        "assets/shaders/internal/**.comp",
         "assets/shaders/internal/**.hlsl"
     }
     includedirs (IryvenPublicIncludeDirs)
@@ -93,6 +94,10 @@ project "Iryven"
     filter "files:assets/shaders/internal/**.frag"
         buildmessage "Compiling %{file.name} to SPIR-V"
         buildcommands { '"' .. glslc .. '" -fshader-stage=frag -o "%{file.abspath}.spv" "%{file.abspath}"' }
+        buildoutputs { "%{file.abspath}.spv" }
+    filter "files:assets/shaders/internal/**.comp"
+        buildmessage "Compiling %{file.name} to SPIR-V"
+        buildcommands { '"' .. glslc .. '" -fshader-stage=comp -o "%{file.abspath}.spv" "%{file.abspath}"' }
         buildoutputs { "%{file.abspath}.spv" }
 
     -- Prevent Visual Studio from sending Vulkan-flavoured HLSL through its

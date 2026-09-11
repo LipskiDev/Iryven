@@ -34,6 +34,14 @@ namespace Iryven {
 			.member<float>("z", 0, offsetof(glm::vec4, z))
 			.member<float>("w", 0, offsetof(glm::vec4, w));
 
+		world_.component<glm::vec2>()
+			.member<float>("x", 0, offsetof(glm::vec2, x))
+			.member<float>("y", 0, offsetof(glm::vec2, y));
+
+		world_.component<glm::uvec2>()
+			.member<std::uint32_t>("x", 0, offsetof(glm::uvec2, x))
+			.member<std::uint32_t>("y", 0, offsetof(glm::uvec2, y));
+
 		world_.component<glm::quat>()
 			.member<float>("x", 0, offsetof(glm::quat, x))
 			.member<float>("y", 0, offsetof(glm::quat, y))
@@ -62,6 +70,18 @@ namespace Iryven {
 			.member<float>("innerConeAngle", 0, offsetof(Light, innerConeAngle))
 			.member<float>("outerConeAngle", 0, offsetof(Light, outerConeAngle))
 			.member<bool>("enabled", 0, offsetof(Light, enabled));
+
+		world_.component<Cloth>()
+			.member<glm::uvec2>("resolution", 0, offsetof(Cloth, resolution))
+			.member<glm::vec2>("size", 0, offsetof(Cloth, size))
+			.member<float>("mass", 0, offsetof(Cloth, mass))
+			.member<float>("stiffness", 0, offsetof(Cloth, stiffness))
+			.member<float>("damping", 0, offsetof(Cloth, damping))
+			.member<float>("gravityScale", 0, offsetof(Cloth, gravityScale))
+			.member<std::uint32_t>("solverIterations", 0,
+				offsetof(Cloth, solverIterations))
+			.member<bool>("pinTopLeft", 0, offsetof(Cloth, pinTopLeft))
+			.member<bool>("pinTopRight", 0, offsetof(Cloth, pinTopRight));
 
 		world_.component<RigidBody>()
 			.member(&RigidBody::type, "type")
@@ -202,6 +222,28 @@ namespace Iryven {
 					.fontSize = text.fontSize,
 					.color = text.color
 				});
+			}
+		);
+
+		auto clothQuery = world_.query<const Transform, const Cloth>();
+		clothQuery.each(
+			[&scene](flecs::entity entity,
+				const Transform& transform, const Cloth& cloth)
+			{
+				scene.cloths.push_back(RenderCloth{
+					.id = entity.id(),
+					.transform = transform.ToMatrix(),
+					.resolution = cloth.resolution,
+					.size = cloth.size,
+					.mass = cloth.mass,
+					.stiffness = cloth.stiffness,
+					.damping = cloth.damping,
+					.gravityScale = cloth.gravityScale,
+					.solverIterations = cloth.solverIterations,
+					.pinTopLeft = cloth.pinTopLeft,
+					.pinTopRight = cloth.pinTopRight,
+					.material = cloth.material,
+					});
 			}
 		);
 

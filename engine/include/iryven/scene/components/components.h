@@ -7,3 +7,4 @@
 #include <iryven/scene/components/rigid_body.h>
 #include <iryven/scene/components/transform.h>
 #include <iryven/scene/components/ui_text.h>
+#include <iryven/scene/components/cloth.h>

@@ -317,6 +317,9 @@ private:
     void RecordBatch(const FrameGraphQueueBatch& batch,
                      Velos::RHI::ICommandList& commandList,
                      const RenderScene& scene);
+    [[nodiscard]] Velos::RHI::QueueRelationship QueueRelationship(
+        Velos::RHI::QueueType first,
+        Velos::RHI::QueueType second) const;
     QueueTimelineState& TimelineFor(Velos::RHI::QueueType queue);
     void DestroyTimelines();
 
