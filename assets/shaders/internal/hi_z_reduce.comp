@@ -1,0 +1,52 @@
+#version 460
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D sourceDepth;
+layout(r32f, set = 0, binding = 1) uniform writeonly image2D destinationDepth;
+
+layout(push_constant) uniform ReductionData {
+    uvec2 sourceExtent;
+    uvec2 destinationExtent;
+    uint destinationMip;
+    uint padding0;
+    uint padding1;
+    uint padding2;
+} reduction;
+
+float ReduceDepth(ivec2 destinationPixel)
+{
+    if (reduction.destinationMip == 0u)
+            return texelFetch(sourceDepth, destinationPixel, 0).r;
+
+    ivec2 srcSize = ivec2(reduction.sourceExtent);
+    ivec2 dstSize = ivec2(reduction.destinationExtent);
+
+    ivec2 begin = (destinationPixel * srcSize) / dstSize;
+
+    ivec2 end = ((destinationPixel + ivec2(1)) * srcSize
+            + dstSize - ivec2(1)) / dstSize;
+
+    float maxDepth = 0.0;
+
+    for (int y = begin.y; y < end.y; ++y)
+    {
+        for (int x = begin.x; x < end.x; ++x)
+        {
+            maxDepth = max(
+                maxDepth,
+                texelFetch(sourceDepth, ivec2(x, y), 0).r);
+        }
+    }
+
+    return maxDepth;
+}
+
+void main()
+{
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+
+
+    if (any(greaterThanEqual(pixel, ivec2(reduction.destinationExtent)))) return;
+    imageStore(destinationDepth, pixel, vec4(ReduceDepth(pixel)));
+}

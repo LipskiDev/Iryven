@@ -36,6 +36,7 @@ struct MeshPrimitive {
     std::uint32_t materialIndex = InvalidModelIndex;
     BoundingBox bounds;
     BoundingSphere boundingSphere;
+	std::vector<Meshlet> meshlets;
 };
 
 struct Mesh {

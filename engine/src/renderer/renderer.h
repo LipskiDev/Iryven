@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
@@ -30,7 +31,7 @@ namespace Iryven {
 		float uploadFrameDataMs = 0.0f;
 	};
 
-	constexpr uint32_t k_MaxLightSources = 128;
+	constexpr uint32_t k_MaxLightSources = 512;
 	constexpr uint32_t k_FramesInFlight = 2;
 
 	class Renderer final : public RenderContext {
@@ -52,19 +53,40 @@ namespace Iryven {
 			return cpuTimings_;
 		}
 		void DrawScene(const RenderScene& renderScene) override;
-        void InitializeImGui();
-        void ShutdownImGui();
-        void BeginImGuiFrame();
-        void DrawImGui();
+		void ToggleCullingCameraFreeze();
+		void InitializeImGui();
+		void ShutdownImGui();
+		void BeginImGuiFrame();
+		void DrawImGui();
 		void EndFrame();
 
 	private:
+		bool cullingCameraFrozen_ = false;
+		bool cullingCameraValid_ = false;
+		FrameData cullingFrameData_{};
+
+		struct alignas(16) GpuFrameData {
+			glm::mat4 view;
+			glm::mat4 projection;
+			glm::mat4 viewProjection;
+			glm::vec4 cameraPosition;
+			glm::mat4 cullingView;
+			glm::mat4 cullingProjection;
+			glm::mat4 cullingViewProjection;
+			glm::vec4 cullingCameraPosition;
+		};
+		static_assert(sizeof(GpuFrameData) == 416);
+		static_assert(offsetof(GpuFrameData, cullingView) == 208);
+		static_assert(offsetof(GpuFrameData, cullingCameraPosition) == 400);
+
 		void DrawObject(
 			Velos::RHI::ICommandList& commands,
 			const RenderObject& object,
-			const FrameData& frameData);
+			const FrameData& frameData, std::uint32_t transmissionPhase = 0);
 		void DrawText(Velos::RHI::ICommandList& commands,
 			const RenderText& text);
+		void DrawTransmissiveObjects(Velos::RHI::ICommandList& commands,
+			const RenderScene& scene);
 		void UploadLights(Velos::RHI::ICommandList& commands,
 			const std::vector<RenderLight>& lights);
 		void UploadFrameData(Velos::RHI::ICommandList& commands,
@@ -100,11 +122,59 @@ namespace Iryven {
 			Velos::RHI::BufferHandle vertexBuffer;
 			Velos::RHI::BufferHandle indexBuffer;
 			std::uint32_t indexCount = 0;
+
+			BufferHandle vertexStorageBuffer;
+			BufferHandle meshletBuffer;
+			BufferHandle meshletVertexIndexBuffer;
+			BufferHandle meshletTriangleIndexBuffer;
+			BindingPoolHandle meshletBindingPool;
+			BindingSetHandle meshletBindingSet;
+			uint32_t meshletCount = 0;
 		};
+
+		struct alignas(16) GpuMeshlet {
+			uint32_t vertexOffset;
+			uint32_t triangleOffset;
+			uint32_t vertexCount;
+			uint32_t triangleCount;
+
+			// Bounding sphere
+			glm::vec3 center{ 0.0f };
+			float radius{ 0.0f };
+
+			// Cone culling
+			glm::vec3 coneApex{ 0.0f };
+			float coneApexPadding{ 0.0f }; // std430 aligns the next vec3 to 16 bytes.
+			glm::vec3 coneAxis{ 0.0f, 0.0f, 1.0f };
+			float coneCutoff{ 1.0f };
+		};
+		static_assert(sizeof(GpuMeshlet) == 64);
+		static_assert(offsetof(GpuMeshlet, center) == 16);
+		static_assert(offsetof(GpuMeshlet, radius) == 28);
+		static_assert(offsetof(GpuMeshlet, coneApex) == 32);
+		static_assert(offsetof(GpuMeshlet, coneAxis) == 48);
+		static_assert(offsetof(GpuMeshlet, coneCutoff) == 60);
+
+
 		struct GpuModel {
+			struct PrimitiveMeshlets {
+				std::uint32_t firstIndex = 0;
+				std::uint32_t indexCount = 0;
+				std::int32_t vertexOffset = 0;
+				std::uint32_t meshletOffset = 0;
+				std::uint32_t meshletCount = 0;
+			};
+
 			std::weak_ptr<const Model> source;
 			BufferHandle vertexBuffer;
 			BufferHandle indexBuffer;
+			BufferHandle vertexStorageBuffer;
+			BufferHandle meshletBuffer;
+			BufferHandle meshletVertexIndexBuffer;
+			BufferHandle meshletTriangleIndexBuffer;
+			BindingPoolHandle meshletBindingPool;
+			BindingSetHandle meshletBindingSet;
+			std::vector<PrimitiveMeshlets> primitiveMeshlets;
 			std::vector<ImageHandle> textureImages;
 			std::vector<ImageViewHandle> textureViews;
 			std::vector<SamplerHandle> samplers;
@@ -215,6 +285,7 @@ namespace Iryven {
 
 	private:
 		class OpaquePass;
+		class HiZPass;
 		class ClothCompute;
 		class ClothDraw;
 
@@ -231,6 +302,7 @@ namespace Iryven {
 		FrameGraph frameGraph_;
 		RendererCpuTimings cpuTimings_{};
 		std::unique_ptr<OpaquePass> opaquePass_;
+		std::unique_ptr<HiZPass> hiZPass_;
 		std::unique_ptr<ClothCompute> clothCompute_;
 		std::unique_ptr<ClothDraw> clothDraw_;
 
@@ -244,6 +316,7 @@ namespace Iryven {
 		ShaderHandle gltfVertexShader_;
 		ShaderHandle gltfFragmentShader_;
 		PipelineHandle gltfPipeline_;
+		std::array<PipelineHandle, 2> gltfTransmissionPipelines_{};
 		GeneratedPipelineLayout gltfGeneratedLayout_;
 		ShaderHandle clothVertexShader_;
 		ShaderHandle clothComputeShader_;
@@ -261,6 +334,14 @@ namespace Iryven {
 		BindingPoolHandle fontBindingPool_;
 		std::array<std::vector<UploadBackedBuffer>, k_FramesInFlight>
 			textVertexBuffers_;
+
+		ShaderHandle meshletTaskShader_;
+		ShaderHandle  meshletShader_;
+		ShaderHandle meshletFragmentShader_;
+		PipelineHandle meshletPipeline_;
+		std::array<PipelineHandle, 2> meshletTransmissionPipelines_{};
+		GeneratedPipelineLayout meshletGeneratedLayout_;
+		BindingLayoutHandle meshletBindingLayout_;
 
 		struct FrameLightingResource {
 			UploadBackedBuffer lightBuffer;

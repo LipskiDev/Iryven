@@ -17,6 +17,18 @@ The public API is exposed from `engine/include/iryven`, with `<iryven/iryven.h>`
 
 ## Tiny editor
 
+### Renderer requirements
+
+The current Vulkan backend requires Vulkan 1.3 and `VK_EXT_mesh_shader` with
+both mesh and task shader support. Vulkan 1.2 compatibility alone is insufficient.
+Initialize dependencies with `git submodule update --init --recursive` and install
+the Vulkan SDK (`VULKAN_SDK` must be set) before generating the solution.
+
+Meshes and model primitives are converted to meshlets using meshoptimizer.
+Hi-Z reduction runs on the compute queue with frame-graph timeline synchronization;
+depth and pyramid images permit concurrent queue-family access. Press P to freeze
+the culling camera and its depth-pyramid history for inspection.
+
 Regenerate the solution with `premake5 vs2026`, then build and run the **Editor** project.
 For Visual Studio 2022, generate with `premake5 vs2022` instead. Run from the repository root
 (the generated project's debugging directory already does this) so shader assets can be found.

@@ -1,4 +1,5 @@
 #include "model_importers.h"
+#include "../renderer/mesh_optimizer.h"
 
 #include <charconv>
 #include <fstream>
@@ -133,6 +134,7 @@ ModelHandle ImportObj(const std::filesystem::path& path) {
 	for (const Vertex& vertex : vertices)
 		boundsRadius = glm::max(boundsRadius, glm::length(vertex.position - boundsCenter));
 	const auto indexCount = static_cast<std::uint32_t>(indices.size());
+	std::vector<Meshlet> meshlets = MeshOptimizer::ConvertToMeshlets(vertices, indices);
 
 	return std::make_shared<const Model>(Model{
 		.source = path,
@@ -145,6 +147,7 @@ ModelHandle ImportObj(const std::filesystem::path& path) {
 				.indexCount = indexCount,
 				.bounds = { boundsMin, boundsMax },
 				.boundingSphere = { boundsCenter, boundsRadius },
+				.meshlets = std::move(meshlets),
 			} },
 			.bounds = { boundsMin, boundsMax },
 		} },

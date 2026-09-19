@@ -28,6 +28,16 @@ struct Material {
     std::uint32_t occlusionTexCoord = 0;
     std::uint32_t emissiveTexture = InvalidTextureIndex;
     std::uint32_t emissiveTexCoord = 0;
+    // KHR_materials_pbrSpecularGlossiness. baseColor stores its diffuse input.
+    bool specularGlossiness = false;
+    Color specular = Color::White;
+    float glossiness = 1.0f;
+    std::uint32_t specularGlossinessTexture = InvalidTextureIndex;
+    std::uint32_t specularGlossinessTexCoord = 0;
+    // KHR_materials_transmission (thin surfaces; separate from alpha coverage).
+    float transmission = 0.0f;
+    std::uint32_t transmissionTexture = InvalidTextureIndex;
+    std::uint32_t transmissionTexCoord = 0;
 };
 
 using MaterialHandle = std::shared_ptr<const Material>;

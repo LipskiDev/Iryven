@@ -1,4 +1,5 @@
 #include <iryven/rendering/primitive_meshes.h>
+#include "../renderer/mesh_optimizer.h"
 
 #include <cmath>
 #include <numbers>
@@ -17,6 +18,11 @@ void RequireSegments(std::uint32_t segments) {
 
 Vertex At(const glm::vec3& position, const glm::vec3& normal) {
     return Vertex{ .position = position, .normal = normal };
+}
+
+MeshHandle Finalize(MeshData mesh) {
+    MeshOptimizer::ConvertToMeshlets(mesh);
+    return std::make_shared<const MeshData>(std::move(mesh));
 }
 
 } // namespace
@@ -39,7 +45,7 @@ MeshHandle Cube() {
         face({ 1, 0, 0 }, { 0.5f,-0.5f, 0.5f}, { 0.5f,-0.5f,-0.5f}, { 0.5f, 0.5f,-0.5f}, { 0.5f, 0.5f, 0.5f});
         face({ 0, 1, 0 }, {-0.5f, 0.5f, 0.5f}, { 0.5f, 0.5f, 0.5f}, { 0.5f, 0.5f,-0.5f}, {-0.5f, 0.5f,-0.5f});
         face({ 0,-1, 0 }, {-0.5f,-0.5f,-0.5f}, { 0.5f,-0.5f,-0.5f}, { 0.5f,-0.5f, 0.5f}, {-0.5f,-0.5f, 0.5f});
-        return std::make_shared<const MeshData>(std::move(result));
+        return Finalize(std::move(result));
     }();
     return mesh;
 }
@@ -67,7 +73,7 @@ MeshHandle Sphere(std::uint32_t segments, std::uint32_t rings) {
             mesh.indices.insert(mesh.indices.end(), { a, a + 1, b + 1, a, b + 1, b });
         }
     }
-    return std::make_shared<const MeshData>(std::move(mesh));
+    return Finalize(std::move(mesh));
 }
 
 MeshHandle Cylinder(std::uint32_t segments) {
@@ -104,7 +110,7 @@ MeshHandle Cylinder(std::uint32_t segments) {
             topCenter, topRing + next, topRing + i
         });
     }
-    return std::make_shared<const MeshData>(std::move(mesh));
+    return Finalize(std::move(mesh));
 }
 
 MeshHandle Cone(std::uint32_t segments) {
@@ -131,11 +137,11 @@ MeshHandle Cone(std::uint32_t segments) {
             center, baseRing + i, baseRing + next
         });
     }
-    return std::make_shared<const MeshData>(std::move(mesh));
+    return Finalize(std::move(mesh));
 }
 
 MeshHandle Plane() {
-    static const MeshHandle mesh = std::make_shared<const MeshData>(MeshData{
+    static const MeshHandle mesh = Finalize(MeshData{
         .vertices = {
             At({-0.5f,0,-0.5f}, {0,1,0}), At({0.5f,0,-0.5f}, {0,1,0}),
             At({0.5f,0,0.5f}, {0,1,0}), At({-0.5f,0,0.5f}, {0,1,0})

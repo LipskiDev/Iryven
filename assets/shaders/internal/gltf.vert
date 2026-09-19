@@ -17,12 +17,18 @@ layout(std140, set = 0, binding = 1) uniform FrameBuffer {
     mat4 frameProjection;
     mat4 frameViewProjection;
     vec4 cameraPosition;
+    mat4 cullingView;
+    mat4 cullingProjection;
+    mat4 cullingViewProjection;
+    vec4 cullingCameraPosition;
 };
 
 layout(push_constant) uniform DrawConstants {
     mat4 model;
     uint materialIndex;
-    uvec3 padding;
+    uint reserved0;
+    uint reserved1;
+    uint phase;
 } draw;
 
 vec3 TransformNormal(vec3 normal, mat4 model) {

@@ -1,4 +1,5 @@
 #include "renderer.h"
+#include <iryven/log.h>
 #include "imgui_renderer.h"
 
 #include <algorithm>
@@ -22,6 +23,7 @@
 #include <rhi/upload_context.h>
 
 #include "passes/opaque.h"
+#include "passes/hi_z.h"
 #include "passes/cloth_compute.h"
 #include "passes/cloth_draw.h"
 
@@ -93,8 +95,16 @@ namespace Iryven {
 		glm::uvec4 textureIndices0{0u};
 		// x=emissive, y=texture-presence flags.
 		glm::uvec4 textureIndices1{0u};
+		glm::vec4 specularGlossiness{1.0f};
+		// x=transmission; remaining lanes reserved.
+		glm::vec4 transmission{0.0f};
+		// x=specular-glossiness texture, y=transmission texture, z=workflow (1=SG).
+		glm::uvec4 extensionTextures{0u};
 	};
-	static_assert(sizeof(GpuMaterial) == 80);
+	static_assert(sizeof(GpuMaterial) == 128);
+	static_assert(offsetof(GpuMaterial, specularGlossiness) == 80);
+	static_assert(offsetof(GpuMaterial, transmission) == 96);
+	static_assert(offsetof(GpuMaterial, extensionTextures) == 112);
 
 	Renderer::Renderer(Window& window, AssetUploadQueue& assetUploads)
 		: window_(window), assetUploads_(assetUploads)
@@ -132,6 +142,7 @@ namespace Iryven {
 			static_cast<std::uint32_t>(width),
 			static_cast<std::uint32_t>(height));
 		CreateBindlessResources();
+		hiZPass_ = std::make_unique<HiZPass>(*this);
 		CreatePipelineResources();
 		CreateBufferResources();
 
@@ -143,6 +154,7 @@ namespace Iryven {
 		frameGraphBuilder_.RegisterRenderPass("opaque", *opaquePass_);
 		frameGraphBuilder_.RegisterRenderPass("clothCompute", *clothCompute_);
 		frameGraphBuilder_.RegisterRenderPass("clothDraw", *clothDraw_);
+		frameGraphBuilder_.RegisterRenderPass("hiZ", *hiZPass_);
 
 		const Color clearColor = Color::CornflowerBlue;
 		frameGraph_.AddNode({
@@ -168,8 +180,9 @@ namespace Iryven {
 						.width = static_cast<std::uint32_t>(width),
 						.height = static_cast<std::uint32_t>(height),
 						.format = Velos::RHI::Format::D32_FLOAT,
-						.usage = Velos::RHI::ImageUsage::DepthStencil,
+						.usage = Velos::RHI::ImageUsage::DepthStencil | Velos::RHI::ImageUsage::Sampled,
 						.loadOp = RenderPassOperation::Clear,
+						.concurrentQueues = true,
 					},
 					.external = true,
 					.name = "depth",
@@ -215,6 +228,18 @@ namespace Iryven {
 		frameGraph_.AddNode({
 			.name = "clothDraw",
 			.inputs = std::move(clothDrawInputs),
+			.outputs = {{.type = FrameGraphResourceType::Reference, .name = "opaqueDepthComplete"}},
+		});
+		frameGraph_.AddNode({
+			.name = "hiZ",
+			.inputs = {
+				{.type = FrameGraphResourceType::Reference, .name = "opaqueDepthComplete"},
+				{.type = FrameGraphResourceType::Texture,
+				 .access = FrameGraphAccess::ShaderSampledRead, .name = "depth"},
+			},
+			// Depth dependencies synchronize graphics -> compute and the next
+			// frame's compute -> graphics history reads through graph timelines.
+			.queue = Velos::RHI::QueueType::Compute,
 		});
 		frameGraph_.Compile();
 	}
@@ -236,6 +261,7 @@ namespace Iryven {
 		for (auto& retired : retiredCloths_) DestroyGpuCloth(retired.resources);
 		retiredCloths_.clear();
 		DestroyPipelineResources();
+		hiZPass_.reset();
 		DestroyBindlessResources();
 		DestroyMeshResources();
 		DestroyFontResources();
@@ -278,6 +304,8 @@ namespace Iryven {
 			DestroyDepthResources();
 			CreateDepthResources(
 				static_cast<std::uint32_t>(width),
+				static_cast<std::uint32_t>(height));
+			hiZPass_->OnResize(*device_, static_cast<std::uint32_t>(width),
 				static_cast<std::uint32_t>(height));
 			swapchainDirty_ = false;
 		}
@@ -329,7 +357,7 @@ namespace Iryven {
 	void Renderer::DrawObject(
 		Velos::RHI::ICommandList& commands,
 		const RenderObject& object,
-		const FrameData& frameData)
+		const FrameData& frameData, std::uint32_t transmissionPhase)
 	{
 		if (!frameActive_) {
 			throw std::logic_error("Renderer::DrawObject called outside an active frame");
@@ -338,6 +366,65 @@ namespace Iryven {
 		GpuMesh* mesh = object.mesh ? ResolveOrCreateMesh(object.mesh) : nullptr;
 		GpuModel* model = object.model ? ResolveOrCreateModel(object.model) : nullptr;
 		if (!mesh && !model) return;
+		const auto meshPipeline = transmissionPhase == 0 ? meshletPipeline_
+			: meshletTransmissionPipelines_.at(transmissionPhase - 1);
+		const auto indexedPipeline = transmissionPhase == 0 ? gltfPipeline_
+			: gltfTransmissionPipelines_.at(transmissionPhase - 1);
+
+		struct MeshDrawConstants {
+			glm::mat4 model;
+			glm::uvec4 meshletInfo{0u};
+		};
+		static_assert(sizeof(MeshDrawConstants) == 80);
+		const auto drawMeshlets = [&](BindingSetHandle bindings,
+			std::uint32_t meshletOffset, std::uint32_t meshletCount) {
+
+			const MaterialSlotKey materialKey{
+				.model = object.model.get(),
+				.material = object.material.get()
+			};
+			const auto materialSlot = object.material
+				? materialSlots_.find(materialKey) : materialSlots_.end();
+
+			uint32_t slot = materialSlot == materialSlots_.end() ? 0u : materialSlot->second;
+
+			const MeshDrawConstants constants{
+				.model = object.transform,
+				.meshletInfo = glm::uvec4(meshletOffset, slot, 0u, transmissionPhase),
+			};
+
+			commands.BindPipeline(meshPipeline);
+			commands.SetBindings(meshPipeline, 0,
+				lightingFrames_.at(frame_.frameIndex).lightBindingSet);
+			commands.SetBindings(meshPipeline, 1,
+				bindlessTextureManager_->BindingSet());
+			commands.SetBindings(meshPipeline, 2, bindings);
+			commands.SetBindings(meshPipeline, 3, hiZPass_->SamplingSet());
+			commands.PushConstants(
+				Velos::RHI::ShaderStage::Mesh | Velos::RHI::ShaderStage::Fragment | Velos::RHI::ShaderStage::Task, 0,
+				static_cast<Velos::u32>(sizeof(constants)), &constants);
+			commands.DrawMeshTasks(meshletCount);
+		};
+
+		if (mesh && mesh->meshletCount > 0) {
+			drawMeshlets(mesh->meshletBindingSet, 0, mesh->meshletCount);
+			return;
+		}
+		if (model && model->meshletBindingSet) {
+			const auto primitive = std::ranges::find_if(
+				model->primitiveMeshlets,
+				[&object](const GpuModel::PrimitiveMeshlets& candidate) {
+					return candidate.firstIndex == object.firstIndex &&
+						candidate.indexCount == object.indexCount &&
+						candidate.vertexOffset == object.vertexOffset;
+				});
+			if (primitive != model->primitiveMeshlets.end() &&
+				primitive->meshletCount > 0) {
+				drawMeshlets(model->meshletBindingSet,
+					primitive->meshletOffset, primitive->meshletCount);
+				return;
+			}
+		}
 
 		struct DrawConstants {
 			glm::mat4 model;
@@ -353,15 +440,16 @@ namespace Iryven {
 			? materialSlots_.find(materialKey) : materialSlots_.end();
 		const DrawConstants drawConstants{
 			.model = object.transform,
-			.materialIndex = materialSlot == materialSlots_.end() ? 0u : materialSlot->second
+			.materialIndex = materialSlot == materialSlots_.end() ? 0u : materialSlot->second,
+			.padding = glm::uvec3(0u, 0u, transmissionPhase),
 		};
 
-		commands.BindPipeline(gltfPipeline_);
+		commands.BindPipeline(indexedPipeline);
 		commands.SetBindings(
-			gltfPipeline_, 0,
+			indexedPipeline, 0,
 			lightingFrames_.at(frame_.frameIndex).lightBindingSet);
 		commands.SetBindings(
-			gltfPipeline_, 1, bindlessTextureManager_->BindingSet());
+			indexedPipeline, 1, bindlessTextureManager_->BindingSet());
 		commands.PushConstants(
 			Velos::RHI::ShaderStage::Vertex | Velos::RHI::ShaderStage::Fragment,
 			0,
@@ -922,20 +1010,31 @@ namespace Iryven {
 			Velos::RHI::ResourceState::UniformBuffer);
 	}
 
+	void Renderer::ToggleCullingCameraFreeze()
+	{
+		cullingCameraFrozen_ = !cullingCameraFrozen_;
+		IRYVEN_CORE_INFO("Culling camera {} (P to toggle)",
+			cullingCameraFrozen_ ? "frozen" : "following view");
+	}
+
 	void Renderer::UploadFrameData(
 		Velos::RHI::ICommandList& commands, const FrameData& frameData)
 	{
-		struct alignas(16) GpuFrameData {
-			glm::mat4 view;
-			glm::mat4 projection;
-			glm::mat4 viewProjection;
-			glm::vec4 cameraPosition;
-		};
+		// Retain the last displayed camera when P is pressed. Rendering always
+		// uses the live frame, including after moving or resizing the viewport.
+		if (!cullingCameraFrozen_ || !cullingCameraValid_) {
+			cullingFrameData_ = frameData;
+			cullingCameraValid_ = true;
+		}
 		const GpuFrameData gpuFrameData{
 			.view = frameData.view,
 			.projection = frameData.projection,
 			.viewProjection = frameData.viewProjection,
-			.cameraPosition = glm::vec4(frameData.cameraPosition, 1.0f)
+			.cameraPosition = glm::vec4(frameData.cameraPosition, 1.0f),
+			.cullingView = cullingFrameData_.view,
+			.cullingProjection = cullingFrameData_.projection,
+			.cullingViewProjection = cullingFrameData_.viewProjection,
+			.cullingCameraPosition = glm::vec4(cullingFrameData_.cameraPosition, 1.0f)
 		};
 		UploadBuffer(
 			commands,
@@ -986,6 +1085,8 @@ namespace Iryven {
 				if (material->normalTexture != InvalidTextureIndex) textureFlags |= 4u;
 				if (material->occlusionTexture != InvalidTextureIndex) textureFlags |= 8u;
 				if (material->emissiveTexture != InvalidTextureIndex) textureFlags |= 16u;
+				if (material->specularGlossinessTexture != InvalidTextureIndex) textureFlags |= 32u;
+				if (material->transmissionTexture != InvalidTextureIndex) textureFlags |= 64u;
 			}
 			materials.push_back(GpuMaterial{
 				.baseColorFactor = material->baseColor.Vector(),
@@ -1003,6 +1104,12 @@ namespace Iryven {
 				.textureIndices1 = glm::uvec4(
 					resolveTextureIndex(material->emissiveTexture),
 					textureFlags, 0u, 0u),
+				.specularGlossiness = glm::vec4(glm::vec3(material->specular.Vector()), material->glossiness),
+				.transmission = glm::vec4(material->transmission, 0.0f, 0.0f, 0.0f),
+				.extensionTextures = glm::uvec4(
+					resolveTextureIndex(material->specularGlossinessTexture),
+					resolveTextureIndex(material->transmissionTexture),
+					material->specularGlossiness ? 1u : 0u, 0u),
 			});
 		};
 
@@ -1160,8 +1267,22 @@ namespace Iryven {
 			gltfVertexShader.reflection,
 			gltfFragmentShader.reflection,
 		};
-		const auto gltfReflection =
+		auto gltfReflection =
 			Velos::ShaderCompiler::MergeShaderReflection(gltfReflections);
+		// Set 0 is shared by the traditional and mesh pipelines. The reflected
+		// graphics shaders only expose the frame buffer to vertex/fragment, so
+		// widen that binding before creating the shared layout.
+		const auto frameBinding = std::ranges::find_if(
+			gltfReflection.resources,
+			[](const Velos::ShaderResourceBinding& resource) {
+				return resource.set == 0 && resource.binding == 1;
+			});
+		if (frameBinding == gltfReflection.resources.end()) {
+			throw std::runtime_error(
+				"glTF pipeline reflection is missing the frame buffer binding");
+		}
+		frameBinding->stage = frameBinding->stage | Velos::RHI::ShaderStage::Mesh |
+			Velos::RHI::ShaderStage::Task;
 		const Velos::PipelineLayoutOverrides gltfLayoutOverrides{
 			.existingSetLayouts = {
 				{1, bindlessTextureManager_->Layout()},
@@ -1175,7 +1296,7 @@ namespace Iryven {
 		}
 		lightsBindingLayout_ = gltfGeneratedLayout_.setLayouts[0];
 
-		gltfPipeline_ = device_->CreateGraphicsPipeline({
+		Velos::RHI::GraphicsPipelineDesc gltfDesc{
 			.vertexShader = gltfVertexShader_,
 			.fragmentShader = gltfFragmentShader_,
 			.vertexLayouts = { gltfVertexLayout },
@@ -1197,7 +1318,25 @@ namespace Iryven {
 			},
 			.colorFormat = Velos::RHI::Format::BGRA8_UNORM,
 			.debugName = "Iryven glTF pipeline",
-		});
+		};
+		gltfPipeline_ = device_->CreateGraphicsPipeline(gltfDesc);
+		// Thin transmission: C = C_background * transmittance + C_surface.
+		// Disable depth writes so the background remains visible.
+		gltfDesc.depth.depthWriteEnable = false;
+		gltfDesc.raster.cullBackFaces = true;
+		gltfDesc.blend = {
+			.enable = true,
+			.srcColor = Velos::RHI::BlendFactor::Zero,
+			.dstColor = Velos::RHI::BlendFactor::SrcColor,
+			.srcAlpha = Velos::RHI::BlendFactor::Zero,
+			.dstAlpha = Velos::RHI::BlendFactor::One,
+		};
+		gltfDesc.debugName = "Iryven graphics transmission attenuation";
+		gltfTransmissionPipelines_[0] = device_->CreateGraphicsPipeline(gltfDesc);
+		gltfDesc.blend.srcColor = Velos::RHI::BlendFactor::One;
+		gltfDesc.blend.dstColor = Velos::RHI::BlendFactor::One;
+		gltfDesc.debugName = "Iryven graphics transmission surface";
+		gltfTransmissionPipelines_[1] = device_->CreateGraphicsPipeline(gltfDesc);
 
 		const auto clothVertexShader = Velos::ShaderCompiler::CompileFile({
 			.path = "assets/shaders/internal/cloth.vert.spv",
@@ -1393,6 +1532,109 @@ namespace Iryven {
 			.colorFormat = Velos::RHI::Format::BGRA8_UNORM,
 			.debugName = "Iryven text pipeline",
 		});
+
+		auto ts = Velos::ShaderCompiler::CompileFile({
+			.path = "assets/shaders/internal/meshlet.task.spv",
+			.stage = Velos::RHI::ShaderStage::Task,
+			.entryPoint = "main",
+			.language = Velos::ShaderSourceLanguage::SpirvBinary,
+		});
+
+		auto ms = Velos::ShaderCompiler::CompileFile({
+			.path = "assets/shaders/internal/meshlet.mesh.spv",
+			.stage = Velos::RHI::ShaderStage::Mesh,
+			.entryPoint = "main",
+			.language = Velos::ShaderSourceLanguage::SpirvBinary,
+			});
+
+		auto fs = Velos::ShaderCompiler::CompileFile({
+			.path = "assets/shaders/internal/meshlet.frag.spv",
+			.stage = Velos::RHI::ShaderStage::Fragment,
+			.entryPoint = "main",
+			.language = Velos::ShaderSourceLanguage::SpirvBinary,
+			});
+
+		meshletTaskShader_ = device_->CreateShader({
+			.stage = Velos::RHI::ShaderStage::Task,
+			.bytecode = ts.spirv.data(),
+			.bytecodeSize = static_cast<Velos::u64>(ts.spirv.size() * sizeof(std::uint32_t)),
+			.entryPoint = "main",
+			.reflection = ts.reflection,
+			.debugName = "Iryven meshlet culling task shader",
+		});
+
+		meshletShader_ = device_->CreateShader({
+			.stage = Velos::RHI::ShaderStage::Mesh,
+			.bytecode = ms.spirv.data(),
+			.bytecodeSize = static_cast<Velos::u64>(ms.spirv.size() * sizeof(std::uint32_t)),
+			.entryPoint = "main",
+			.reflection = ms.reflection,
+			.debugName = "Iryven meshlet shader",
+			});
+
+		meshletFragmentShader_ = device_->CreateShader({
+			.stage = Velos::RHI::ShaderStage::Fragment,
+			.bytecode = fs.spirv.data(),
+			.bytecodeSize = static_cast<Velos::u64>(fs.spirv.size() * sizeof(std::uint32_t)),
+			.entryPoint = "main",
+			.reflection = fs.reflection,
+			.debugName = "Iryven meshlet fragment shader",
+			});
+
+		const std::array meshReflections{ts.reflection, ms.reflection, fs.reflection};
+		const auto meshReflection =
+			Velos::ShaderCompiler::MergeShaderReflection(meshReflections);
+		const Velos::PipelineLayoutOverrides meshLayoutOverrides{
+			.existingSetLayouts = {
+				{0, lightsBindingLayout_},
+				{1, bindlessTextureManager_->Layout()},
+				{3, hiZPass_->SamplingLayout()},
+			},
+		};
+		meshletGeneratedLayout_ = device_->BuildPipelineLayout(
+			meshReflection, meshLayoutOverrides);
+		if (meshletGeneratedLayout_.setLayouts.size() != 4) {
+			throw std::runtime_error(
+				"Mesh pipeline must contain descriptor sets 0, 1, 2, and Hi-Z set 3");
+		}
+		meshletBindingLayout_ = meshletGeneratedLayout_.setLayouts[2];
+
+		Velos::RHI::MeshPipelineDesc meshletDesc{
+			.taskShader = meshletTaskShader_,
+			.meshShader = meshletShader_,
+			.fragmentShader = meshletFragmentShader_,
+			.layout = {
+				.descriptorSetLayouts = meshletGeneratedLayout_.setLayouts.data(),
+				.descriptorSetLayoutCount = static_cast<Velos::u32>(
+					meshletGeneratedLayout_.setLayouts.size()),
+			},
+			.raster = {.cullBackFaces = false, .frontFaceCCW = true},
+			.depth = {
+				.depthTestEnable = true,
+				.depthWriteEnable = true,
+				.depthFormat = Velos::RHI::Format::D32_FLOAT
+			},
+			.colorFormat = Velos::RHI::Format::BGRA8_UNORM,
+			.debugName = "Iryven meshlet pipeline",
+			};
+		meshletPipeline_ = device_->CreateMeshPipeline(meshletDesc);
+		// Thin transmission: C = C_background * transmittance + C_surface.
+		// Disable depth writes so the background remains visible.
+		meshletDesc.depth.depthWriteEnable = false;
+		meshletDesc.raster.cullBackFaces = true;
+		meshletDesc.blend = {
+			.enable = true,
+			.srcColor = Velos::RHI::BlendFactor::Zero,
+			.dstColor = Velos::RHI::BlendFactor::SrcColor,
+			.srcAlpha = Velos::RHI::BlendFactor::Zero,
+			.dstAlpha = Velos::RHI::BlendFactor::One,
+		};
+		meshletDesc.debugName = "Iryven mesh transmission attenuation";
+		meshletTransmissionPipelines_[0] = device_->CreateMeshPipeline(meshletDesc);
+		meshletDesc.blend.srcColor = Velos::RHI::BlendFactor::One;
+		meshletDesc.blend.dstColor = Velos::RHI::BlendFactor::One;
+		meshletDesc.debugName = "Iryven mesh transmission surface";
+		meshletTransmissionPipelines_[1] = device_->CreateMeshPipeline(meshletDesc);
 	}
 
 	void Renderer::CreateDepthResources(std::uint32_t width, std::uint32_t height)
@@ -1401,7 +1643,8 @@ namespace Iryven {
 			.width = width,
 			.height = height,
 			.format = Velos::RHI::Format::D32_FLOAT,
-			.usage = Velos::RHI::ImageUsage::DepthStencil,
+			.usage = Velos::RHI::ImageUsage::DepthStencil | Velos::RHI::ImageUsage::Sampled,
+			.concurrentQueues = true,
 			.debugName = "Iryven main depth image"
 		});
 		try {
@@ -1433,6 +1676,36 @@ namespace Iryven {
 
 	void Renderer::DestroyPipelineResources()
 	{
+		for (auto& pipeline : meshletTransmissionPipelines_) {
+			if (pipeline) device_->DestroyPipeline(pipeline);
+			pipeline = {};
+		}
+		for (auto& pipeline : gltfTransmissionPipelines_) {
+			if (pipeline) device_->DestroyPipeline(pipeline);
+			pipeline = {};
+		}
+		if (meshletPipeline_) {
+			device_->DestroyPipeline(meshletPipeline_);
+			meshletPipeline_ = {};
+		}
+		if (meshletFragmentShader_) {
+			device_->DestroyShader(meshletFragmentShader_);
+			meshletFragmentShader_ = {};
+		}
+		if (meshletShader_) {
+			device_->DestroyShader(meshletShader_);
+			meshletShader_ = {};
+		}
+		if (meshletTaskShader_) {
+			device_->DestroyShader(meshletTaskShader_);
+			meshletTaskShader_ = {};
+		}
+		meshletBindingLayout_ = {};
+		for (const auto layout : meshletGeneratedLayout_.ownedSetLayouts) {
+			device_->DestroyBindingLayout(layout);
+		}
+		meshletGeneratedLayout_ = {};
+
 		if (clothComputePipeline_) {
 			device_->DestroyPipeline(clothComputePipeline_);
 			clothComputePipeline_ = {};
@@ -1494,20 +1767,78 @@ namespace Iryven {
 			return nullptr;
 		}
 
+		static_assert(sizeof(Vertex) == 64,
+			"meshlet.mesh expects Vertex to occupy 16 floats");
 		const std::size_t vertexBufferSize = mesh->vertices.size() * sizeof(Vertex);
 		const std::size_t indexBufferSize =
 			mesh->indices.size() * sizeof(std::uint32_t);
-		const auto vertexBuffer = device_->CreateBuffer({
-			.size = vertexBufferSize,
-			.usage = Velos::RHI::BufferUsage::Vertex |
-				Velos::RHI::BufferUsage::TransferDst,
-			.memoryUsage = Velos::RHI::MemoryUsage::GPUOnly,
-			.debugName = "Iryven mesh vertex buffer"
-		});
 
-		Velos::RHI::BufferHandle indexBuffer;
+		std::vector<GpuMeshlet> gpuMeshlets;
+		std::vector<std::uint32_t> meshletVertexIndices;
+		std::vector<std::uint32_t> meshletTriangleIndices;
+		gpuMeshlets.reserve(mesh->meshlets.size());
+		for (const Meshlet& meshlet : mesh->meshlets) {
+			if (meshlet.vertexIndices.empty() || meshlet.triangleIndices.empty() ||
+				meshlet.vertexIndices.size() > 64 ||
+				meshlet.triangleIndices.size() % 3 != 0 ||
+				meshlet.triangleIndices.size() / 3 > 128 ||
+				std::ranges::any_of(meshlet.vertexIndices,
+					[vertexCount](std::uint32_t index) { return index >= vertexCount; }) ||
+				std::ranges::any_of(meshlet.triangleIndices,
+					[&meshlet](std::uint32_t index) {
+						return index >= meshlet.vertexIndices.size();
+					})) {
+				throw std::runtime_error("Mesh contains invalid meshlet data");
+			}
+			if (meshletVertexIndices.size() > std::numeric_limits<std::uint32_t>::max() ||
+				meshletTriangleIndices.size() > std::numeric_limits<std::uint32_t>::max()) {
+				throw std::runtime_error("Meshlet streams exceed 32-bit offsets");
+			}
+			gpuMeshlets.push_back({
+				.vertexOffset = static_cast<std::uint32_t>(meshletVertexIndices.size()),
+				.triangleOffset = static_cast<std::uint32_t>(meshletTriangleIndices.size()),
+				.vertexCount = static_cast<std::uint32_t>(meshlet.vertexIndices.size()),
+				.triangleCount = static_cast<std::uint32_t>(
+					meshlet.triangleIndices.size() / 3),
+				.center = meshlet.center,
+				.radius = meshlet.radius,
+				.coneApex = meshlet.coneApex,
+				.coneAxis = meshlet.coneAxis,
+				.coneCutoff = meshlet.coneCutoff,
+			});
+			meshletVertexIndices.insert(meshletVertexIndices.end(),
+				meshlet.vertexIndices.begin(), meshlet.vertexIndices.end());
+			meshletTriangleIndices.insert(meshletTriangleIndices.end(),
+				meshlet.triangleIndices.begin(), meshlet.triangleIndices.end());
+		}
+		if (gpuMeshlets.size() > std::numeric_limits<std::uint32_t>::max()) {
+			throw std::runtime_error("Mesh contains too many meshlets");
+		}
+
+		GpuMesh gpuMesh{
+			.source = mesh,
+			.indexCount = static_cast<std::uint32_t>(mesh->indices.size()),
+			.meshletCount = static_cast<std::uint32_t>(gpuMeshlets.size()),
+		};
+		const auto destroyGpuMesh = [this](GpuMesh& gpu) {
+			if (gpu.meshletBindingPool) device_->DestroyBindingPool(gpu.meshletBindingPool);
+			if (gpu.meshletTriangleIndexBuffer) device_->DestroyBuffer(gpu.meshletTriangleIndexBuffer);
+			if (gpu.meshletVertexIndexBuffer) device_->DestroyBuffer(gpu.meshletVertexIndexBuffer);
+			if (gpu.meshletBuffer) device_->DestroyBuffer(gpu.meshletBuffer);
+			if (gpu.vertexStorageBuffer) device_->DestroyBuffer(gpu.vertexStorageBuffer);
+			if (gpu.indexBuffer) device_->DestroyBuffer(gpu.indexBuffer);
+			if (gpu.vertexBuffer) device_->DestroyBuffer(gpu.vertexBuffer);
+		};
+
 		try {
-			indexBuffer = device_->CreateBuffer({
+			gpuMesh.vertexBuffer = device_->CreateBuffer({
+				.size = vertexBufferSize,
+				.usage = Velos::RHI::BufferUsage::Vertex |
+					Velos::RHI::BufferUsage::TransferDst,
+				.memoryUsage = Velos::RHI::MemoryUsage::GPUOnly,
+				.debugName = "Iryven mesh vertex buffer"
+			});
+			gpuMesh.indexBuffer = device_->CreateBuffer({
 				.size = indexBufferSize,
 				.usage = Velos::RHI::BufferUsage::Index |
 					Velos::RHI::BufferUsage::TransferDst,
@@ -1515,36 +1846,120 @@ namespace Iryven {
 				.debugName = "Iryven mesh index buffer"
 			});
 
-			// The second staging allocation may need up to 15 bytes of padding.
-			auto upload = device_->CreateUploadContext(
-				vertexBufferSize + indexBufferSize + 15);
+			std::size_t uploadSize = vertexBufferSize + indexBufferSize + 16;
+			if (!gpuMeshlets.empty()) {
+				const std::size_t meshletBufferSize = gpuMeshlets.size() * sizeof(GpuMeshlet);
+				const std::size_t vertexIndexBufferSize =
+					meshletVertexIndices.size() * sizeof(std::uint32_t);
+				const std::size_t triangleIndexBufferSize =
+					meshletTriangleIndices.size() * sizeof(std::uint32_t);
+				gpuMesh.vertexStorageBuffer = device_->CreateBuffer({
+					.size = vertexBufferSize,
+					.usage = BufferUsage::Storage | BufferUsage::TransferDst,
+					.memoryUsage = MemoryUsage::GPUOnly,
+					.debugName = "Iryven mesh shader vertex buffer",
+				});
+				gpuMesh.meshletBuffer = device_->CreateBuffer({
+					.size = meshletBufferSize,
+					.usage = BufferUsage::Storage | BufferUsage::TransferDst,
+					.memoryUsage = MemoryUsage::GPUOnly,
+					.debugName = "Iryven meshlet buffer",
+				});
+				gpuMesh.meshletVertexIndexBuffer = device_->CreateBuffer({
+					.size = vertexIndexBufferSize,
+					.usage = BufferUsage::Storage | BufferUsage::TransferDst,
+					.memoryUsage = MemoryUsage::GPUOnly,
+					.debugName = "Iryven meshlet vertex index buffer",
+				});
+				gpuMesh.meshletTriangleIndexBuffer = device_->CreateBuffer({
+					.size = triangleIndexBufferSize,
+					.usage = BufferUsage::Storage | BufferUsage::TransferDst,
+					.memoryUsage = MemoryUsage::GPUOnly,
+					.debugName = "Iryven meshlet triangle index buffer",
+				});
+				uploadSize += vertexBufferSize + meshletBufferSize +
+					vertexIndexBufferSize + triangleIndexBufferSize + 64;
+			}
+
+			auto upload = device_->CreateUploadContext(uploadSize);
 			upload->Begin();
 			upload->UploadBuffer({
-				.dstBuffer = vertexBuffer,
+				.dstBuffer = gpuMesh.vertexBuffer,
 				.size = vertexBufferSize,
 				.data = mesh->vertices.data(),
 				.finalState = Velos::RHI::ResourceState::VertexBuffer,
 			});
 			upload->UploadBuffer({
-				.dstBuffer = indexBuffer,
+				.dstBuffer = gpuMesh.indexBuffer,
 				.size = indexBufferSize,
 				.data = mesh->indices.data(),
 				.finalState = Velos::RHI::ResourceState::IndexBuffer,
 			});
+			if (!gpuMeshlets.empty()) {
+				upload->UploadBuffer({
+					.dstBuffer = gpuMesh.vertexStorageBuffer,
+					.size = vertexBufferSize,
+					.data = mesh->vertices.data(),
+					.finalState = ResourceState::ShaderRead,
+				});
+				upload->UploadBuffer({
+					.dstBuffer = gpuMesh.meshletBuffer,
+					.size = gpuMeshlets.size() * sizeof(GpuMeshlet),
+					.data = gpuMeshlets.data(),
+					.finalState = ResourceState::ShaderRead,
+				});
+				upload->UploadBuffer({
+					.dstBuffer = gpuMesh.meshletVertexIndexBuffer,
+					.size = meshletVertexIndices.size() * sizeof(std::uint32_t),
+					.data = meshletVertexIndices.data(),
+					.finalState = ResourceState::ShaderRead,
+				});
+				upload->UploadBuffer({
+					.dstBuffer = gpuMesh.meshletTriangleIndexBuffer,
+					.size = meshletTriangleIndices.size() * sizeof(std::uint32_t),
+					.data = meshletTriangleIndices.data(),
+					.finalState = ResourceState::ShaderRead,
+				});
+			}
 			upload->Flush();
 			device_->AcquireUploadedBuffers(upload->TakePendingBufferAcquires());
+
+			if (!gpuMeshlets.empty()) {
+				const BindingPoolSize poolSize{
+					.type = BindingType::StorageBuffer,
+					.count = 4,
+				};
+				gpuMesh.meshletBindingPool = device_->CreateBindingPool({
+					.poolSizes = &poolSize,
+					.poolSizeCount = 1,
+					.maxSets = 1,
+					.debugName = "Iryven meshlet binding pool",
+				});
+				gpuMesh.meshletBindingSet = device_->AllocateBindingSet({
+					.pool = gpuMesh.meshletBindingPool,
+					.layout = meshletBindingLayout_,
+					.debugName = "Iryven meshlet binding set",
+				});
+				const std::array infos{
+					BindingBufferInfo{.buffer = gpuMesh.vertexStorageBuffer, .range = vertexBufferSize},
+					BindingBufferInfo{.buffer = gpuMesh.meshletBuffer, .range = gpuMeshlets.size() * sizeof(GpuMeshlet)},
+					BindingBufferInfo{.buffer = gpuMesh.meshletVertexIndexBuffer, .range = meshletVertexIndices.size() * sizeof(std::uint32_t)},
+					BindingBufferInfo{.buffer = gpuMesh.meshletTriangleIndexBuffer, .range = meshletTriangleIndices.size() * sizeof(std::uint32_t)},
+				};
+				for (std::uint32_t binding = 0; binding < infos.size(); ++binding) {
+					device_->UpdateBindingSet({
+						.dstSet = gpuMesh.meshletBindingSet,
+						.binding = binding,
+						.type = BindingType::StorageBuffer,
+						.bufferInfo = &infos[binding],
+					});
+				}
+			}
 		}
 		catch (...) {
-			device_->DestroyBuffer(vertexBuffer);
+			destroyGpuMesh(gpuMesh);
 			throw;
 		}
-
-		GpuMesh gpuMesh{
-			.source = mesh,
-			.vertexBuffer = vertexBuffer,
-			.indexBuffer = indexBuffer,
-			.indexCount = static_cast<std::uint32_t>(mesh->indices.size())
-		};
 
 		auto [entry, inserted] = meshes_.emplace(mesh.get(), std::move(gpuMesh));
 		return &entry->second;
@@ -1664,16 +2079,82 @@ namespace Iryven {
 		const std::size_t vertexBufferSize = model->vertices.size() * sizeof(Vertex);
 		const std::size_t indexBufferSize =
 			model->indices.size() * sizeof(std::uint32_t);
-		const auto vertexBuffer = device_->CreateBuffer({
-			.size = vertexBufferSize,
-			.usage = Velos::RHI::BufferUsage::Vertex |
-				Velos::RHI::BufferUsage::TransferDst,
-			.memoryUsage = Velos::RHI::MemoryUsage::GPUOnly,
-			.debugName = "Iryven model vertex buffer"
-		});
-		Velos::RHI::BufferHandle indexBuffer;
+
+		std::vector<GpuMeshlet> gpuMeshlets;
+		std::vector<std::uint32_t> meshletVertexIndices;
+		std::vector<std::uint32_t> meshletTriangleIndices;
+		std::vector<GpuModel::PrimitiveMeshlets> primitiveMeshlets;
+		for (const Mesh& sourceMesh : model->meshes) {
+			for (const MeshPrimitive& primitive : sourceMesh.primitives) {
+				if (gpuMeshlets.size() > std::numeric_limits<std::uint32_t>::max()) {
+					throw std::runtime_error("Model contains too many meshlets");
+				}
+				GpuModel::PrimitiveMeshlets gpuPrimitive{
+					.firstIndex = primitive.firstIndex,
+					.indexCount = primitive.indexCount,
+					.vertexOffset = primitive.vertexOffset,
+					.meshletOffset = static_cast<std::uint32_t>(gpuMeshlets.size()),
+				};
+				for (const Meshlet& meshlet : primitive.meshlets) {
+					if (meshlet.vertexIndices.empty() || meshlet.triangleIndices.empty() ||
+						meshlet.vertexIndices.size() > 64 ||
+						meshlet.triangleIndices.size() % 3 != 0 ||
+						meshlet.triangleIndices.size() / 3 > 128 ||
+						std::ranges::any_of(meshlet.triangleIndices,
+							[&meshlet](std::uint32_t index) {
+								return index >= meshlet.vertexIndices.size();
+							})) {
+						throw std::runtime_error("Model contains invalid meshlet data");
+					}
+					if (meshletVertexIndices.size() > std::numeric_limits<std::uint32_t>::max() ||
+						meshletTriangleIndices.size() > std::numeric_limits<std::uint32_t>::max()) {
+						throw std::runtime_error("Model meshlet streams exceed 32-bit offsets");
+					}
+					gpuMeshlets.push_back({
+						.vertexOffset = static_cast<std::uint32_t>(meshletVertexIndices.size()),
+						.triangleOffset = static_cast<std::uint32_t>(meshletTriangleIndices.size()),
+						.vertexCount = static_cast<std::uint32_t>(meshlet.vertexIndices.size()),
+						.triangleCount = static_cast<std::uint32_t>(
+							meshlet.triangleIndices.size() / 3),
+						.center = meshlet.center,
+						.radius = meshlet.radius,
+						.coneApex = meshlet.coneApex,
+						.coneAxis = meshlet.coneAxis,
+						.coneCutoff = meshlet.coneCutoff,
+					});
+					for (const std::uint32_t localIndex : meshlet.vertexIndices) {
+						const std::int64_t modelIndex =
+							static_cast<std::int64_t>(localIndex) + primitive.vertexOffset;
+						if (modelIndex < 0 || modelIndex >=
+							static_cast<std::int64_t>(model->vertices.size())) {
+							throw std::runtime_error(
+								"Model meshlet vertex index is out of range");
+						}
+						meshletVertexIndices.push_back(
+							static_cast<std::uint32_t>(modelIndex));
+					}
+					meshletTriangleIndices.insert(meshletTriangleIndices.end(),
+						meshlet.triangleIndices.begin(), meshlet.triangleIndices.end());
+				}
+				gpuPrimitive.meshletCount = static_cast<std::uint32_t>(
+					gpuMeshlets.size() - gpuPrimitive.meshletOffset);
+				primitiveMeshlets.push_back(gpuPrimitive);
+			}
+		}
+
+		GpuModel gpuModel{
+			.source = model,
+			.primitiveMeshlets = std::move(primitiveMeshlets),
+		};
 		try {
-			indexBuffer = device_->CreateBuffer({
+			gpuModel.vertexBuffer = device_->CreateBuffer({
+				.size = vertexBufferSize,
+				.usage = Velos::RHI::BufferUsage::Vertex |
+					Velos::RHI::BufferUsage::TransferDst,
+				.memoryUsage = Velos::RHI::MemoryUsage::GPUOnly,
+				.debugName = "Iryven model vertex buffer"
+			});
+			gpuModel.indexBuffer = device_->CreateBuffer({
 				.size = indexBufferSize,
 				.usage = Velos::RHI::BufferUsage::Index |
 					Velos::RHI::BufferUsage::TransferDst,
@@ -1681,33 +2162,119 @@ namespace Iryven {
 				.debugName = "Iryven model index buffer"
 			});
 
-			// The second staging allocation may need up to 15 bytes of padding.
-			auto upload = device_->CreateUploadContext(
-				vertexBufferSize + indexBufferSize + 15);
+			std::size_t uploadSize = vertexBufferSize + indexBufferSize + 16;
+			if (!gpuMeshlets.empty()) {
+				const std::size_t meshletBytes = gpuMeshlets.size() * sizeof(GpuMeshlet);
+				const std::size_t vertexIndexBytes =
+					meshletVertexIndices.size() * sizeof(std::uint32_t);
+				const std::size_t triangleIndexBytes =
+					meshletTriangleIndices.size() * sizeof(std::uint32_t);
+				gpuModel.vertexStorageBuffer = device_->CreateBuffer({
+					.size = vertexBufferSize,
+					.usage = BufferUsage::Storage | BufferUsage::TransferDst,
+					.memoryUsage = MemoryUsage::GPUOnly,
+					.debugName = "Iryven model mesh shader vertex buffer",
+				});
+				gpuModel.meshletBuffer = device_->CreateBuffer({
+					.size = meshletBytes,
+					.usage = BufferUsage::Storage | BufferUsage::TransferDst,
+					.memoryUsage = MemoryUsage::GPUOnly,
+					.debugName = "Iryven model meshlet buffer",
+				});
+				gpuModel.meshletVertexIndexBuffer = device_->CreateBuffer({
+					.size = vertexIndexBytes,
+					.usage = BufferUsage::Storage | BufferUsage::TransferDst,
+					.memoryUsage = MemoryUsage::GPUOnly,
+					.debugName = "Iryven model meshlet vertex index buffer",
+				});
+				gpuModel.meshletTriangleIndexBuffer = device_->CreateBuffer({
+					.size = triangleIndexBytes,
+					.usage = BufferUsage::Storage | BufferUsage::TransferDst,
+					.memoryUsage = MemoryUsage::GPUOnly,
+					.debugName = "Iryven model meshlet triangle index buffer",
+				});
+				uploadSize += vertexBufferSize + meshletBytes +
+					vertexIndexBytes + triangleIndexBytes + 64;
+			}
+
+			auto upload = device_->CreateUploadContext(uploadSize);
 			upload->Begin();
 			upload->UploadBuffer({
-				.dstBuffer = vertexBuffer,
+				.dstBuffer = gpuModel.vertexBuffer,
 				.size = vertexBufferSize,
 				.data = model->vertices.data(),
 				.finalState = Velos::RHI::ResourceState::VertexBuffer,
 			});
 			upload->UploadBuffer({
-				.dstBuffer = indexBuffer,
+				.dstBuffer = gpuModel.indexBuffer,
 				.size = indexBufferSize,
 				.data = model->indices.data(),
 				.finalState = Velos::RHI::ResourceState::IndexBuffer,
 			});
+			if (!gpuMeshlets.empty()) {
+				upload->UploadBuffer({
+					.dstBuffer = gpuModel.vertexStorageBuffer,
+					.size = vertexBufferSize,
+					.data = model->vertices.data(),
+					.finalState = ResourceState::ShaderRead,
+				});
+				upload->UploadBuffer({
+					.dstBuffer = gpuModel.meshletBuffer,
+					.size = gpuMeshlets.size() * sizeof(GpuMeshlet),
+					.data = gpuMeshlets.data(),
+					.finalState = ResourceState::ShaderRead,
+				});
+				upload->UploadBuffer({
+					.dstBuffer = gpuModel.meshletVertexIndexBuffer,
+					.size = meshletVertexIndices.size() * sizeof(std::uint32_t),
+					.data = meshletVertexIndices.data(),
+					.finalState = ResourceState::ShaderRead,
+				});
+				upload->UploadBuffer({
+					.dstBuffer = gpuModel.meshletTriangleIndexBuffer,
+					.size = meshletTriangleIndices.size() * sizeof(std::uint32_t),
+					.data = meshletTriangleIndices.data(),
+					.finalState = ResourceState::ShaderRead,
+				});
+			}
 			upload->Flush();
 			device_->AcquireUploadedBuffers(upload->TakePendingBufferAcquires());
+
+			if (!gpuMeshlets.empty()) {
+				const BindingPoolSize poolSize{
+					.type = BindingType::StorageBuffer,
+					.count = 4,
+				};
+				gpuModel.meshletBindingPool = device_->CreateBindingPool({
+					.poolSizes = &poolSize,
+					.poolSizeCount = 1,
+					.maxSets = 1,
+					.debugName = "Iryven model meshlet binding pool",
+				});
+				gpuModel.meshletBindingSet = device_->AllocateBindingSet({
+					.pool = gpuModel.meshletBindingPool,
+					.layout = meshletBindingLayout_,
+					.debugName = "Iryven model meshlet binding set",
+				});
+				const std::array infos{
+					BindingBufferInfo{.buffer = gpuModel.vertexStorageBuffer, .range = vertexBufferSize},
+					BindingBufferInfo{.buffer = gpuModel.meshletBuffer, .range = gpuMeshlets.size() * sizeof(GpuMeshlet)},
+					BindingBufferInfo{.buffer = gpuModel.meshletVertexIndexBuffer, .range = meshletVertexIndices.size() * sizeof(std::uint32_t)},
+					BindingBufferInfo{.buffer = gpuModel.meshletTriangleIndexBuffer, .range = meshletTriangleIndices.size() * sizeof(std::uint32_t)},
+				};
+				for (std::uint32_t binding = 0; binding < infos.size(); ++binding) {
+					device_->UpdateBindingSet({
+						.dstSet = gpuModel.meshletBindingSet,
+						.binding = binding,
+						.type = BindingType::StorageBuffer,
+						.bufferInfo = &infos[binding],
+					});
+				}
+			}
 		} catch (...) {
-			device_->DestroyBuffer(vertexBuffer);
+			DestroyGpuModel(gpuModel);
 			throw;
 		}
-		GpuModel gpuModel{
-			.source = model,
-			.vertexBuffer = vertexBuffer,
-			.indexBuffer = indexBuffer
-		};
 		try {
 			gpuModel.samplers.reserve(model->textureRegistry.samplers.size());
 			const auto convertFilter = [](TextureFilter filter) {
@@ -1794,11 +2361,7 @@ namespace Iryven {
 				bindlessTextureManager_->Release(index, completedSubmissionSerial_);
 			}
 			bindlessTextureManager_->CollectGarbage(completedSubmissionSerial_);
-			for (const auto view : gpuModel.textureViews) device_->DestroyImageView(view);
-			for (const auto image : gpuModel.textureImages) device_->DestroyImage(image);
-			for (const auto sampler : gpuModel.samplers) device_->DestroySampler(sampler);
-			device_->DestroyBuffer(indexBuffer);
-			device_->DestroyBuffer(vertexBuffer);
+			DestroyGpuModel(gpuModel);
 			throw;
 		}
 		auto [entry, inserted] = models_.emplace(model.get(), std::move(gpuModel));
@@ -1813,8 +2376,14 @@ namespace Iryven {
 				continue;
 			}
 
-			device_->DestroyBuffer(it->second.indexBuffer);
-			device_->DestroyBuffer(it->second.vertexBuffer);
+			GpuMesh& mesh = it->second;
+			if (mesh.meshletBindingPool) device_->DestroyBindingPool(mesh.meshletBindingPool);
+			if (mesh.meshletTriangleIndexBuffer) device_->DestroyBuffer(mesh.meshletTriangleIndexBuffer);
+			if (mesh.meshletVertexIndexBuffer) device_->DestroyBuffer(mesh.meshletVertexIndexBuffer);
+			if (mesh.meshletBuffer) device_->DestroyBuffer(mesh.meshletBuffer);
+			if (mesh.vertexStorageBuffer) device_->DestroyBuffer(mesh.vertexStorageBuffer);
+			device_->DestroyBuffer(mesh.indexBuffer);
+			device_->DestroyBuffer(mesh.vertexBuffer);
 			it = meshes_.erase(it);
 		}
 		for (auto it = models_.begin(); it != models_.end();) {
@@ -1858,11 +2427,17 @@ namespace Iryven {
 
 	void Renderer::DestroyGpuModel(GpuModel& model)
 	{
+		if (model.meshletBindingPool) device_->DestroyBindingPool(model.meshletBindingPool);
 		for (const auto sampler : model.samplers) device_->DestroySampler(sampler);
 		for (const auto view : model.textureViews) device_->DestroyImageView(view);
 		for (const auto image : model.textureImages) device_->DestroyImage(image);
-		device_->DestroyBuffer(model.indexBuffer);
-		device_->DestroyBuffer(model.vertexBuffer);
+		if (model.meshletTriangleIndexBuffer) device_->DestroyBuffer(model.meshletTriangleIndexBuffer);
+		if (model.meshletVertexIndexBuffer) device_->DestroyBuffer(model.meshletVertexIndexBuffer);
+		if (model.meshletBuffer) device_->DestroyBuffer(model.meshletBuffer);
+		if (model.vertexStorageBuffer) device_->DestroyBuffer(model.vertexStorageBuffer);
+		if (model.indexBuffer) device_->DestroyBuffer(model.indexBuffer);
+		if (model.vertexBuffer) device_->DestroyBuffer(model.vertexBuffer);
+		model = {};
 	}
 
 	void Renderer::DestroyGpuCloth(GpuCloth& cloth)
@@ -1930,7 +2505,7 @@ namespace Iryven {
 				"Frame Lights Buffer",
 				"Frame Lights Upload Buffer");
 			frame.frameDataBuffer = CreateUploadBackedBuffer(
-				sizeof(glm::mat4) * 3 + sizeof(glm::vec4),
+				sizeof(GpuFrameData),
 				Velos::RHI::BufferUsage::Uniform,
 				"Frame Data Buffer",
 				"Frame Data Upload Buffer");
@@ -1958,7 +2533,7 @@ namespace Iryven {
 			const Velos::RHI::BindingBufferInfo frameDataBufferInfo{
 				.buffer = frame.frameDataBuffer.gpuBuffer,
 				.offset = 0,
-				.range = sizeof(glm::mat4) * 3 + sizeof(glm::vec4)
+				.range = sizeof(GpuFrameData)
 			};
 			device_->UpdateBindingSet({
 				.dstSet = frame.lightBindingSet,
@@ -2027,6 +2602,11 @@ namespace Iryven {
 	void Renderer::DestroyMeshResources()
 	{
 		for (const auto& [source, mesh] : meshes_) {
+			if (mesh.meshletBindingPool) device_->DestroyBindingPool(mesh.meshletBindingPool);
+			if (mesh.meshletTriangleIndexBuffer) device_->DestroyBuffer(mesh.meshletTriangleIndexBuffer);
+			if (mesh.meshletVertexIndexBuffer) device_->DestroyBuffer(mesh.meshletVertexIndexBuffer);
+			if (mesh.meshletBuffer) device_->DestroyBuffer(mesh.meshletBuffer);
+			if (mesh.vertexStorageBuffer) device_->DestroyBuffer(mesh.vertexStorageBuffer);
 			device_->DestroyBuffer(mesh.indexBuffer);
 			device_->DestroyBuffer(mesh.vertexBuffer);
 		}

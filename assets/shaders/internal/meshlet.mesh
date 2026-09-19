@@ -1,0 +1,141 @@
+#version 460
+#extension GL_EXT_mesh_shader : require
+#extension GL_EXT_nonuniform_qualifier : require
+
+layout(local_size_x = 32) in;
+layout(triangles, max_vertices = 64, max_primitives = 128) out;
+
+struct TaskPayload
+{
+    uint meshletIndex;
+};
+taskPayloadSharedEXT TaskPayload payload;
+
+layout(location = 0) out vec2 outTexCoord[];
+layout(location = 1) out vec4 outColor[];
+layout(location = 2) out vec3 outNormal[];
+layout(location = 3) out vec4 outTangent[];
+layout(location = 4) perprimitiveEXT out flat uint outMeshletId[];
+layout(location = 5) out vec3 outWorldPos[];
+layout(location = 6) perprimitiveEXT out flat vec3 outMeshletCenter[];
+
+struct Meshlet
+{
+    uint vertexOffset;
+    uint triangleOffset;
+    uint vertexCount;
+    uint triangleCount;
+
+    vec3 center;
+    float radius;
+
+    vec3 coneApex;
+    vec3 coneAxis;
+    float coneCutoff;
+};
+
+layout(set = 2, binding = 0, std430) readonly buffer Vertices
+{
+    float vertexData[];
+};
+
+layout(set = 2, binding = 1, std430) readonly buffer Meshlets
+{
+    Meshlet meshlets[];
+};
+
+layout(set = 2, binding = 2, std430) readonly buffer MeshletVertexIndices
+{
+    uint meshletVertexIndices[];
+};
+
+layout(set = 2, binding = 3, std430) readonly buffer MeshletTriangleIndices
+{
+    uint meshletTriangleIndices[];
+};
+
+layout(std140, set = 0, binding = 1) uniform FrameBuffer
+{
+    mat4 frameView;
+    mat4 frameProjection;
+    mat4 frameViewProjection;
+    vec4 cameraPosition;
+    mat4 cullingView;
+    mat4 cullingProjection;
+    mat4 cullingViewProjection;
+    vec4 cullingCameraPosition;
+};
+
+layout(push_constant) uniform DrawConstants
+{
+    mat4 model;
+	uvec4 meshletInfo;
+} draw;
+
+void main()
+{
+	uint meshletId = draw.meshletInfo.x + payload.meshletIndex;
+    Meshlet meshlet = meshlets[meshletId];
+    SetMeshOutputsEXT(meshlet.vertexCount, meshlet.triangleCount);
+    mat3 modelBasis = mat3(draw.model);
+    mat3 normalMatrix = transpose(inverse(modelBasis));
+    float orientation = determinant(modelBasis) < 0.0 ? -1.0 : 1.0;
+
+    for (uint vertex = gl_LocalInvocationIndex; vertex < meshlet.vertexCount; vertex += gl_WorkGroupSize.x)
+    {
+        uint sourceVertex =
+            meshletVertexIndices[meshlet.vertexOffset + vertex];
+
+        uint base = sourceVertex * 16u;
+
+        vec3 position = vec3(
+            vertexData[base + 0u],
+            vertexData[base + 1u],
+            vertexData[base + 2u]);
+
+        vec3 normal = vec3(
+            vertexData[base + 3u],
+            vertexData[base + 4u],
+            vertexData[base + 5u]);
+
+        vec2 texCoord = vec2(
+            vertexData[base + 6u],
+            vertexData[base + 7u]);
+
+
+        vec4 tangent = vec4(
+            vertexData[base + 8u],
+            vertexData[base + 9u],
+            vertexData[base + 10u],
+            vertexData[base + 11u]);
+
+        vec4 color = vec4(
+            vertexData[base + 12u],
+            vertexData[base + 13u],
+            vertexData[base + 14u],
+            vertexData[base + 15u]);
+
+        vec4 worldPosition = draw.model * vec4(position, 1.0);
+        gl_MeshVerticesEXT[vertex].gl_Position =
+            frameViewProjection * worldPosition;
+
+        outTexCoord[vertex] = texCoord;
+        outColor[vertex] = color;
+        outNormal[vertex] = normalMatrix * normal;
+        outTangent[vertex] = vec4(modelBasis * tangent.xyz, tangent.w * orientation);
+        outWorldPos[vertex] = worldPosition.xyz;
+    }
+
+    for (uint triangle = gl_LocalInvocationIndex;
+         triangle < meshlet.triangleCount;
+         triangle += gl_WorkGroupSize.x)
+    {
+        uint sourceOffset = meshlet.triangleOffset + triangle * 3;
+        gl_PrimitiveTriangleIndicesEXT[triangle] = uvec3(
+            meshletTriangleIndices[sourceOffset],
+            meshletTriangleIndices[sourceOffset + 1],
+            meshletTriangleIndices[sourceOffset + 2]);
+        outMeshletId[triangle] = meshletId;
+        outMeshletCenter[triangle] = (draw.model * vec4(meshlet.center, 1.0)).xyz;
+    }
+}

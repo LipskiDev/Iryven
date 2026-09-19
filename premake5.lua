@@ -26,6 +26,7 @@ IryvenPublicIncludeDirs = {
     "external/glm",
     "external/flecs/distr",
     "external/enkiTS/src",
+    "external/meshoptimizer/src",
     "external/msdf-atlas-gen",
     "external/msdf-atlas-gen/msdfgen"
 }
@@ -47,6 +48,7 @@ include "premake/box3d.lua"
 include "premake/msdf.lua"
 include "premake/fastgltf.lua"
 include "premake/enkits.lua"
+include "premake/meshoptimizer.lua"
 
 project "Iryven"
     location "build/Iryven"
@@ -69,7 +71,10 @@ project "Iryven"
         "assets/shaders/internal/**.vert",
         "assets/shaders/internal/**.frag",
         "assets/shaders/internal/**.comp",
-        "assets/shaders/internal/**.hlsl"
+        "assets/shaders/internal/**.hlsl",
+        "assets/shaders/internal/**.glsl",
+        "assets/shaders/internal/**.mesh",
+        "assets/shaders/internal/**.task"
     }
     includedirs (IryvenPublicIncludeDirs)
     includedirs {
@@ -83,25 +88,32 @@ project "Iryven"
     }
     defines (IryvenPublicDefines)
     defines { "GLFW_INCLUDE_NONE", "IMGUI_IMPL_VULKAN_NO_PROTOTYPES" }
-    links { "Velos", "spdlog", "Flecs", "Box3D", "MSDFAtlasGen", "fastgltf", "enkiTS" }
+    links { "Velos", "spdlog", "Flecs", "Box3D", "MSDFAtlasGen", "fastgltf", "enkiTS", "meshoptimizer" }
 
     -- Compile GLSL to SPIR-V at build time. Runtime shader loading still
     -- performs reflection, but no longer invokes the GLSL compiler.
     filter "files:assets/shaders/internal/**.vert"
         buildmessage "Compiling %{file.name} to SPIR-V"
-        buildcommands { '"' .. glslc .. '" -fshader-stage=vert -o "%{file.abspath}.spv" "%{file.abspath}"' }
+        buildcommands { '"' .. glslc .. '" --target-env=vulkan1.3 -fshader-stage=vert -o "%{file.abspath}.spv" "%{file.abspath}"' }
         buildoutputs { "%{file.abspath}.spv" }
     filter "files:assets/shaders/internal/**.frag"
+        buildinputs { "assets/shaders/internal/gltf_material.glsl" }
         buildmessage "Compiling %{file.name} to SPIR-V"
-        buildcommands { '"' .. glslc .. '" -fshader-stage=frag -o "%{file.abspath}.spv" "%{file.abspath}"' }
+        buildcommands { '"' .. glslc .. '" --target-env=vulkan1.3 -fshader-stage=frag -o "%{file.abspath}.spv" "%{file.abspath}"' }
         buildoutputs { "%{file.abspath}.spv" }
     filter "files:assets/shaders/internal/**.comp"
         buildmessage "Compiling %{file.name} to SPIR-V"
-        buildcommands { '"' .. glslc .. '" -fshader-stage=comp -o "%{file.abspath}.spv" "%{file.abspath}"' }
+        buildcommands { '"' .. glslc .. '" --target-env=vulkan1.3 -fshader-stage=comp -o "%{file.abspath}.spv" "%{file.abspath}"' }
+        buildoutputs { "%{file.abspath}.spv" }
+    filter "files:assets/shaders/internal/**.mesh"
+        buildmessage "Compiling %{file.name} to SPIR-V"
+        buildcommands { '"' .. glslc .. '" --target-env=vulkan1.3 -fshader-stage=mesh -o "%{file.abspath}.spv" "%{file.abspath}"' }
+        buildoutputs { "%{file.abspath}.spv" }
+    filter "files:assets/shaders/internal/**.task"
+        buildmessage "Compiling %{file.name} to SPIR-V"
+        buildcommands { '"' .. glslc .. '" --target-env=vulkan1.3 -fshader-stage=task -o "%{file.abspath}.spv" "%{file.abspath}"' }
         buildoutputs { "%{file.abspath}.spv" }
 
-    -- Prevent Visual Studio from sending Vulkan-flavoured HLSL through its
-    -- legacy FXC build step.
     filter "files:**.hlsl"
         excludefrombuild "On"
 

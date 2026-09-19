@@ -83,6 +83,9 @@ void Engine::Run()
         input_.BeginFrame();
         window_->PollEvents();
         input_.EvaluateActions();
+        if (input_.WasKeyPressed(Key::P)) {
+            renderer_->ToggleCullingCameraFreeze();
+        }
         currentTimings.eventsMs = elapsedMilliseconds(eventsStart);
 
         const auto updateStart = Clock::now();

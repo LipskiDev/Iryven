@@ -3,6 +3,7 @@
 /build/
 /cache/
 /assets/shaders/internal/*.spv
+/assets/models/Bistro_Godot.glb
 /.vs/
 /external/LivePP/
 *.sln

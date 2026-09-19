@@ -1,0 +1,165 @@
+#version 460
+#extension GL_EXT_mesh_shader : require
+
+layout(local_size_x = 1) in;
+
+struct TaskPayload
+{
+    uint meshletIndex;
+};
+taskPayloadSharedEXT TaskPayload payload;
+
+// Previous rendered frame's pyramid, or the frozen snapshot when P is active.
+layout(set = 3, binding = 0) uniform sampler2D hiZDepth;
+layout(std140, set = 3, binding = 1) uniform HiZHistory
+{
+    mat4 hiZViewProjection;
+    uvec4 hiZInfo; // width, height, mip count, history available (0/1).
+};
+
+layout(std140, set = 0, binding = 1) uniform FrameBuffer
+{
+    mat4 frameView;
+    mat4 frameProjection;
+    mat4 frameViewProjection;
+    vec4 cameraPosition;
+    mat4 cullingView;
+    mat4 cullingProjection;
+    mat4 cullingViewProjection;
+    vec4 cullingCameraPosition;
+};
+
+struct Meshlet
+{
+    uint vertexOffset;
+    uint triangleOffset;
+    uint vertexCount;
+    uint triangleCount;
+
+    vec3 center;
+    float radius;
+
+    vec3 coneApex;
+    vec3 coneAxis;
+    float coneCutoff;
+};
+
+layout(std430, set = 2, binding = 1) readonly buffer Meshlets
+{
+    Meshlet meshlets[];
+};
+
+layout(push_constant) uniform DrawConstants
+{
+    mat4 model;
+    uvec4 meshletInfo;
+} draw;
+
+bool IsMeshletVisible(Meshlet meshlet)
+{
+    mat4 m = transpose(cullingViewProjection * draw.model);
+
+    vec4 planes[6] = vec4[6](
+        m[3] + m[0], // left
+        m[3] - m[0], // right
+        m[3] + m[1], // bottom
+        m[3] - m[1], // top
+        m[2], // near
+        m[3] - m[2]  // far
+    );
+
+    for(int i = 0; i < 6; ++i)
+    {
+        vec4 plane = planes[i];
+        float distance = dot(vec4(meshlet.center, 1.0), plane);
+        if (distance < -meshlet.radius * length(plane.xyz))
+            return false;
+    }
+    return true;
+}
+
+bool coneCull(vec3 center, float radius, vec3 coneAxis, float coneCutoff, vec3 cameraPosition)
+{
+    return dot(center - cameraPosition, coneAxis) >= coneCutoff * length(center - cameraPosition) + radius;
+}
+
+bool IsMeshletOcclusionVisible(Meshlet meshlet)
+{
+    if(hiZInfo.w == 0u)
+        return true;
+
+    vec4 meshletCorners[8] = vec4[8](
+        vec4(meshlet.center + vec3(-meshlet.radius, -meshlet.radius, -meshlet.radius), 1.0),
+        vec4(meshlet.center + vec3(-meshlet.radius, -meshlet.radius, meshlet.radius), 1.0),
+        vec4(meshlet.center + vec3(-meshlet.radius, meshlet.radius, -meshlet.radius), 1.0),
+        vec4(meshlet.center + vec3(-meshlet.radius, meshlet.radius, meshlet.radius), 1.0),
+        vec4(meshlet.center + vec3(meshlet.radius, -meshlet.radius, -meshlet.radius), 1.0),
+        vec4(meshlet.center + vec3(meshlet.radius, -meshlet.radius, meshlet.radius), 1.0),
+        vec4(meshlet.center + vec3(meshlet.radius, meshlet.radius, -meshlet.radius), 1.0),
+        vec4(meshlet.center + vec3(meshlet.radius, meshlet.radius, meshlet.radius), 1.0)
+    );
+
+    mat4 mvp = hiZViewProjection * draw.model;
+
+    vec2 minXY = vec2(1e30);
+    vec2 maxXY = vec2(-1e30);
+    float nearestDepth = 1.0;
+
+    for(int i = 0; i < 8; ++i)
+    {
+        vec4 clipSpacePos = mvp * meshletCorners[i];
+        if(clipSpacePos.w <= 0.0 || clipSpacePos.z < 0.0)
+            return true; // If any corner is behind the near plane, consider it visible.
+
+
+        vec3 ndc = clipSpacePos.xyz / clipSpacePos.w;
+
+        minXY = min(minXY, ndc.xy);
+        maxXY = max(maxXY, ndc.xy);
+        nearestDepth = min(nearestDepth, ndc.z);
+    }
+
+    vec2 uvMin = minXY * 0.5 + 0.5;
+    vec2 uvMax = maxXY * 0.5 + 0.5;
+
+    if(any(lessThan(uvMin, vec2(0.0))) || any(greaterThan(uvMax, vec2(1.0))))
+        return true; // If the bounding box is outside the screen, consider it visible.
+
+    vec2 extentPixels = (uvMax - uvMin) * vec2(hiZInfo.xy);
+    float longestSide = max(extentPixels.x, extentPixels.y);
+
+    int mip = int(ceil(log2(max(longestSide, 1.0))));
+    mip = clamp(mip, 0, int(hiZInfo.z) - 1);
+
+    ivec2 mipSize = textureSize(hiZDepth, mip);
+    ivec2 first = ivec2(floor(uvMin * vec2(mipSize)));
+    ivec2 last = ivec2(ceil(uvMax * vec2(mipSize)));
+
+    first = clamp(first, ivec2(0), mipSize - 1);
+    last = clamp(last, ivec2(0), mipSize - 1);
+
+    float maxDepth = 0.0;
+    for(int y = first.y; y <= last.y; ++y)
+    {
+        for(int x = first.x; x <= last.x; ++x)
+        {
+            maxDepth = max(maxDepth, texelFetch(hiZDepth, ivec2(x, y), mip).r);
+        }
+    }
+
+   return nearestDepth <= maxDepth + 0.001;
+}
+
+
+void main()
+{
+    uint meshletIndex = gl_WorkGroupID.x;
+    payload.meshletIndex = meshletIndex;
+    uint meshletId = draw.meshletInfo.x + payload.meshletIndex;
+
+    bool visible = IsMeshletVisible(meshlets[meshletId]) && !coneCull(meshlets[meshletId].center, meshlets[meshletId].radius, meshlets[meshletId].coneAxis, meshlets[meshletId].coneCutoff, cullingCameraPosition.xyz);
+    visible = visible && IsMeshletOcclusionVisible(meshlets[meshletId]);
+
+    payload.meshletIndex = meshletIndex;
+    EmitMeshTasksEXT(visible ? 1u : 0u, 1u, 1u);
+}

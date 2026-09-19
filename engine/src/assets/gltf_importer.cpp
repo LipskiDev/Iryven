@@ -1,4 +1,5 @@
 #include "model_importers.h"
+#include "../renderer/mesh_optimizer.h"
 
 #include <limits>
 #include <map>
@@ -17,7 +18,9 @@ namespace Iryven::Importers {
 
 	ModelHandle ImportGltf(const std::filesystem::path& path) {
 		constexpr fastgltf::Extensions extensions =
-			fastgltf::Extensions::KHR_mesh_quantization;
+			fastgltf::Extensions::KHR_mesh_quantization |
+			fastgltf::Extensions::KHR_materials_pbrSpecularGlossiness |
+			fastgltf::Extensions::KHR_materials_transmission;
 		constexpr fastgltf::Options options =
 			fastgltf::Options::LoadExternalBuffers |
 			fastgltf::Options::GenerateMeshIndices;
@@ -200,14 +203,14 @@ namespace Iryven::Importers {
 				source.emissiveFactor[2],
 				1.0f);
 
-			if (source.pbrData.baseColorTexture) {
+			if (!source.specularGlossiness && source.pbrData.baseColorTexture) {
 				material->baseColorTexture = registerTexture(
 					source.pbrData.baseColorTexture->textureIndex, TextureColorSpace::SRGB);
 				material->baseColorTexCoord = requireU32(
 					source.pbrData.baseColorTexture->texCoordIndex, "base color texcoord index");
 			}
 
-			if (source.pbrData.metallicRoughnessTexture) {
+			if (!source.specularGlossiness && source.pbrData.metallicRoughnessTexture) {
 				material->metallicRoughnessTexture = registerTexture(
 					source.pbrData.metallicRoughnessTexture->textureIndex, TextureColorSpace::Linear);
 				material->metallicRoughnessTexCoord = requireU32(
@@ -241,6 +244,37 @@ namespace Iryven::Importers {
 				);
 			}
 
+			if (source.specularGlossiness) {
+				const auto& sg = *source.specularGlossiness;
+				material->specularGlossiness = true;
+				material->baseColor = Color(sg.diffuseFactor[0], sg.diffuseFactor[1],
+					sg.diffuseFactor[2], sg.diffuseFactor[3]);
+				material->specular = Color(sg.specularFactor[0], sg.specularFactor[1], sg.specularFactor[2]);
+				material->glossiness = sg.glossinessFactor;
+				material->metallic = 0.0f;
+				material->roughness = 1.0f - sg.glossinessFactor;
+				material->baseColorTexture = InvalidTextureIndex;
+				material->metallicRoughnessTexture = InvalidTextureIndex;
+				if (sg.diffuseTexture) {
+					material->baseColorTexture = registerTexture(sg.diffuseTexture->textureIndex, TextureColorSpace::SRGB);
+					material->baseColorTexCoord = requireU32(sg.diffuseTexture->texCoordIndex, "diffuse texcoord index");
+				}
+				if (sg.specularGlossinessTexture) {
+					// RGB is sRGB specular; alpha stays linear glossiness.
+					material->specularGlossinessTexture = registerTexture(sg.specularGlossinessTexture->textureIndex, TextureColorSpace::SRGB);
+					material->specularGlossinessTexCoord = requireU32(sg.specularGlossinessTexture->texCoordIndex, "specular-glossiness texcoord index");
+				}
+			}
+			if (source.transmission) {
+				if (source.specularGlossiness)
+					throw std::runtime_error("glTF transmission cannot be combined with specular-glossiness in '" + path.string() + "'");
+				material->transmission = source.transmission->transmissionFactor;
+				if (source.transmission->transmissionTexture) {
+					const auto& texture = *source.transmission->transmissionTexture;
+					material->transmissionTexture = registerTexture(texture.textureIndex, TextureColorSpace::Linear);
+					material->transmissionTexCoord = requireU32(texture.texCoordIndex, "transmission texcoord index");
+				}
+			}
 			result.materials.push_back(std::move(material));
 		}
 
@@ -349,6 +383,9 @@ namespace Iryven::Importers {
 						? requireU32(*sourcePrimitive.materialIndex, "material index") : InvalidModelIndex,
 					.bounds = { boundsMin, boundsMax },
 					.boundingSphere = { center, radius },
+					.meshlets = MeshOptimizer::ConvertToMeshlets(
+						std::span<const Vertex>(result.vertices.data() + baseVertex, vertexCount),
+						std::span<const std::uint32_t>(result.indices.data() + firstIndex, indexCount)),
 				});
 				if (!hasMeshBounds) { mesh.bounds = { boundsMin, boundsMax }; hasMeshBounds = true; }
 				else {

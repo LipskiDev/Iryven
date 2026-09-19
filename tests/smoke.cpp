@@ -5,9 +5,14 @@
 #include <chrono>
 #include <fstream>
 #include <iterator>
+#include <iostream>
 #include <memory>
 #include <string>
 #include <vector>
+#ifdef _MSC_VER
+#include <crtdbg.h>
+#include <cstdlib>
+#endif
 
 #include <glm/common.hpp>
 #include <shader/shader_compiler.h>
@@ -78,8 +83,14 @@ private:
 
 } // namespace
 
-int main()
+int RunSmokeTests()
 {
+#ifdef _MSC_VER
+    // Report test failures to the runner instead of opening a blocking CRT dialog.
+    _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+    _set_error_mode(_OUT_TO_STDERR);
+#endif
     {
         Iryven::GameLayer pausedGame;
         auto body = pausedGame.GetWorld().CreateEntity("Paused Body");
@@ -145,6 +156,7 @@ int main()
             .pinTopRight = false,
         });
         const auto probeMesh = Iryven::PrimitiveMeshes::Cube();
+		assert(!probeMesh->meshlets.empty());
         probe.Add<Iryven::MeshRenderer>(probeMesh);
         const auto path = std::filesystem::temp_directory_path() /
             ("iryven-scene-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".json");
@@ -568,8 +580,63 @@ int main()
 		assert(attachmentProducerCount == 1);
 		assert(attachmentConsumerCount == 1);
 
+		// Hi-Z scheduling: graphics depth writes -> compute sampled reads,
+		// then the following frame writes the same depth image again.
+		graph.Reset();
+		graph.AddNode({
+			.name = "attachment-producer",
+			.outputs = {{
+				.type = Iryven::FrameGraphResourceType::Attachment,
+				.access = Iryven::FrameGraphAccess::DepthStencilWrite,
+				.info = Iryven::FrameGraphTextureInfo{
+					.width = 17, .height = 9,
+					.format = Velos::RHI::Format::D32_FLOAT,
+					.usage = Velos::RHI::ImageUsage::DepthStencil |
+						Velos::RHI::ImageUsage::Sampled,
+					.loadOp = Iryven::RenderPassOperation::Clear,
+					.concurrentQueues = true,
+				},
+				.external = true, .name = "hi-z-source-depth",
+			}},
+		});
+		graph.AddNode({
+			.name = "attachment-consumer",
+			.inputs = {{
+				.type = Iryven::FrameGraphResourceType::Texture,
+				.access = Iryven::FrameGraphAccess::ShaderSampledRead,
+				.name = "hi-z-source-depth",
+			}},
+			.queue = Velos::RHI::QueueType::Compute,
+		});
+		graph.Compile();
+		const auto hiZDepth = device->CreateImage({
+			.width = 17, .height = 9, .format = Velos::RHI::Format::D32_FLOAT,
+			.usage = Velos::RHI::ImageUsage::DepthStencil | Velos::RHI::ImageUsage::Sampled,
+			.concurrentQueues = true,
+		});
+		const auto hiZDepthView = device->CreateImageView({
+			.image = hiZDepth, .format = Velos::RHI::Format::D32_FLOAT,
+			.aspect = Velos::RHI::ImageAspect::Depth,
+		});
+		auto& hiZDepthInfo = std::get<Iryven::FrameGraphTextureInfo>(
+			graph.GetResource("hi-z-source-depth")->info);
+		hiZDepthInfo.handle = hiZDepth;
+		hiZDepthInfo.view = hiZDepthView;
+		for (int frame = 0; frame < 3; ++frame) {
+			graph.BeginFrame();
+			graph.Render({});
+			assert(device->GetImageLayout(hiZDepth, 0) == Velos::RHI::ImageLayout::ShaderReadOnly);
+			assert(graph.GraphicsSubmissionWaits().size() ==
+				(queueRelationship == Velos::RHI::QueueRelationship::SameQueue ? 0u : 1u));
+		}
+		device->WaitIdle();
+		assert(attachmentProducerCount == 4);
+		assert(attachmentConsumerCount == 4);
+
         graph.Shutdown();
         builder.Shutdown();
+		device->DestroyImageView(hiZDepthView);
+		device->DestroyImage(hiZDepth);
 		device->DestroyImageView(attachmentView);
 		device->DestroyImage(attachmentImage);
         device.reset();
@@ -597,6 +664,22 @@ int main()
 	assert(!bindlessVertexShader.spirv.empty());
 	assert(!bindlessFragmentShader.spirv.empty());
 	assert(!clothVertexShader.spirv.empty());
+
+	const auto hiZShader = Velos::ShaderCompiler::CompileFile({
+		.path = "assets/shaders/internal/hi_z_reduce.comp",
+		.stage = Velos::RHI::ShaderStage::Compute,
+		.entryPoint = "main",
+		.language = Velos::ShaderSourceLanguage::GLSL,
+	});
+	assert(!hiZShader.spirv.empty());
+	assert(hiZShader.reflection.pushConstants.size() == 1);
+	assert(hiZShader.reflection.pushConstants[0].offset == 0);
+	assert(hiZShader.reflection.pushConstants[0].size == 32);
+	assert(std::any_of(hiZShader.reflection.resources.begin(),
+		hiZShader.reflection.resources.end(), [](const auto& binding) {
+			return binding.set == 0 && binding.binding == 1 &&
+				binding.type == Velos::ShaderResourceType::StorageImage;
+		}));
 
     const auto texture = std::make_shared<const Iryven::Texture>(Iryven::Texture{
         .width = 1,
@@ -657,6 +740,8 @@ int main()
     assert(gltfModel->indices == std::vector<std::uint32_t>({ 0, 1, 2 }));
     assert(gltfModel->meshes.size() == 1);
     assert(gltfModel->meshes.front().primitives.front().indexCount == 3);
+	assert(gltfModel->meshes.front().primitives.front().meshlets.size() == 1);
+	assert(gltfModel->meshes.front().primitives.front().meshlets.front().triangleIndices.size() == 3);
     assert(gltfModel->nodes.size() == 1);
     assert(gltfModel->nodes.front().localTransform[3].x == 2.0f);
     assert(gltfModel->materials.size() == 1);
@@ -680,6 +765,27 @@ int main()
     assert(gltfSampler.minFilter == Iryven::TextureFilter::LinearMipmapLinear);
     assert(gltfSampler.wrapU == Iryven::TextureWrap::ClampToEdge);
     assert(gltfSampler.wrapV == Iryven::TextureWrap::MirroredRepeat);
+
+    const auto extensionModel = gltfAssets.LoadModel("tests/assets/material_extensions.gltf");
+    assert(extensionModel && extensionModel->IsValid());
+    assert(extensionModel->materials.size() == 2);
+    const auto& sgMaterial = extensionModel->materials[0];
+    assert(sgMaterial->specularGlossiness);
+    assert(sgMaterial->baseColor.R() == 0.6f); // Extension overrides metallic-roughness fallback.
+    assert(sgMaterial->baseColor.A() == 0.8f);
+    assert(sgMaterial->specular.G() == 0.4f);
+    assert(sgMaterial->glossiness == 0.7f);
+    assert(sgMaterial->metallic == 0.0f);
+    assert(sgMaterial->specularGlossinessTexture != Iryven::InvalidTextureIndex);
+    assert(extensionModel->textureRegistry.textures[sgMaterial->specularGlossinessTexture]
+        .texture->colorSpace == Iryven::TextureColorSpace::SRGB);
+    const auto& glassMaterial = extensionModel->materials[1];
+    assert(!glassMaterial->specularGlossiness);
+    assert(glassMaterial->transmission == 0.75f);
+    assert(glassMaterial->transmissionTexture != Iryven::InvalidTextureIndex);
+    assert(extensionModel->textureRegistry.textures[glassMaterial->transmissionTexture]
+        .texture->colorSpace == Iryven::TextureColorSpace::Linear);
+    assert(!extensionModel->meshes[0].primitives[1].meshlets.empty());
 
     const Iryven::ModelHandle objModel = gltfAssets.LoadModel("assets/models/cube.obj");
     assert(objModel && objModel->IsValid());
@@ -875,4 +981,15 @@ int main()
     }
     assert(collisionExitedA);
     assert(collisionExitedB);
+    return 0;
+}
+
+int main()
+{
+    try {
+        return RunSmokeTests();
+    } catch (const std::exception& error) {
+        std::cerr << "Smoke test failed: " << error.what() << '\n';
+        return 1;
+    }
 }

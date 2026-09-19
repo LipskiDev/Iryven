@@ -6,6 +6,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -182,12 +183,15 @@ int main()
 		});
 	engine.PushOverlay(std::make_unique<FpsOverlay>(engine));
 
-	auto sponzaAsset = engine.GetAsyncLoader().RequestModel("assets/models/sponza/Sponza.gltf");
-
-	auto sponzaEntity = engine.GetWorld().CreateEntity("Sponza");
-	sponzaEntity.Add<Iryven::Transform>(Iryven::Transform{
-	});
-	//sponzaEntity.Add<Iryven::MeshRenderer>(sponzaAsset);
+	// Bistro is an optional local asset; a fresh clone uses the tracked Sponza scene.
+	const bool hasBistro = std::filesystem::exists("assets/models/Bistro_Godot.glb");
+	auto sceneAsset = engine.GetAsyncLoader().RequestModel(hasBistro
+		? "assets/models/Bistro_Godot.glb" : "assets/models/sponza/Sponza.gltf");
+	auto sceneEntity = engine.GetWorld().CreateEntity(hasBistro ? "Bistro" : "Sponza");
+	sceneEntity.Add<Iryven::Transform>(Iryven::Transform{
+		.position = glm::vec3{0.0f, 0.0f, 0.0f},
+		});
+	sceneEntity.Add<Iryven::MeshRenderer>(sceneAsset);
 
 	Iryven::World& world = engine.GetWorld();
 	Iryven::InputHandler& input = engine.GetInput();
@@ -197,35 +201,54 @@ int main()
 	camera.Add<CameraMotion>();
 	camera.Add<Iryven::Camera>(Iryven::Camera{
 		.verticalFov = 52.0f,
-		});
+	});
+
+	//for (int i = 0; i < 10; i++) {
+	//	auto light = world.CreateEntity("Point Light " + std::to_string(i));
+	//	light.Add<Iryven::Transform>(Iryven::Transform{
+	//			.position = glm::vec3{
+	//				-10.0f + static_cast<float>(rand()) / (static_cast<float>(RAND_MAX / 20.0f)),
+	//				1.0f + static_cast<float>(rand()) / (static_cast<float>(RAND_MAX / 5.0f)),
+	//				-10.0f + static_cast<float>(rand()) / (static_cast<float>(RAND_MAX / 20.0f))
+	//			},
+	//		});
+
+	//	light.Add<Iryven::Light>(Iryven::Light{
+	//			.type = Iryven::LightType::Point,
+	//			.color = Iryven::Color{
+	//				static_cast<float>(rand()) / static_cast<float>(RAND_MAX),
+	//				static_cast<float>(rand()) / static_cast<float>(RAND_MAX),
+	//				static_cast<float>(rand()) / static_cast<float>(RAND_MAX),
+	//				1.0f
+	//			},
+	//			.intensity = 10.5f,
+	//			.range = 10.0,
+	//		});
+	//}
 
 	auto light = world.CreateEntity("Directional Light");
 	light.Add<Iryven::Transform>(Iryven::Transform{
-		.position = glm::vec3{ 0.0f, 1.0f, 0.0f },
-		.rotation = glm::quat{
-			glm::vec3{ glm::radians(-55.0f), glm::radians(-35.0f), 0.0f }
-		},
+		.position = glm::vec3{0.0f, 10.0f, 0.0f},
+		.rotation = glm::normalize(glm::angleAxis(glm::radians(-45.0f), glm::vec3{1.0f, 1.0f, 0.0f})),
 	});
-
 	light.Add<Iryven::Light>(Iryven::Light{
 		.type = Iryven::LightType::Directional,
-		.color = Iryven::Color::White,
-		.intensity = 10.5f,
-		.range = 10.0,
+		.color = Iryven::Color{1.0f, 1.0f, 1.0f, 1.0f},
+		.intensity = 10.0f,
 	});
 
-	auto cloth = world.CreateEntity("Cloth");
-	cloth.Add<Iryven::Transform>(Iryven::Transform{
-		.position = glm::vec3{0.0f, 2.0f, -3.0f},
-	});
-	cloth.Add<Iryven::Cloth>(Iryven::Cloth{
-		.resolution = {32u, 32u},
-		.size = {2.0f, 2.0f},
-		.stiffness = 0.1f,
-		.damping = 0.01f,
-		.material = MakeMaterial(
-			"Cloth", Iryven::Color{0.65f, 0.08f, 0.06f, 1.0f}, 0.75f),
-	});
+	//auto cloth = world.CreateEntity("Cloth");
+	//cloth.Add<Iryven::Transform>(Iryven::Transform{
+	//	.position = glm::vec3{0.0f, 2.0f, -3.0f},
+	//});
+	//cloth.Add<Iryven::Cloth>(Iryven::Cloth{
+	//	.resolution = {32u, 32u},
+	//	.size = {2.0f, 2.0f},
+	//	.stiffness = 0.1f,
+	//	.damping = 0.01f,
+	//	.material = MakeMaterial(
+	//		"Cloth", Iryven::Color{0.65f, 0.08f, 0.06f, 1.0f}, 0.75f),
+	//});
 
 	world.AddSystem<Iryven::Camera, Iryven::Transform, CameraMotion>("Camera Control", [&](float deltaTime, Iryven::Camera&, Iryven::Transform& transform, CameraMotion& motion) {
 		if (deltaTime <= 0.0f) return;
