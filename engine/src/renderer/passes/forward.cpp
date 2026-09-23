@@ -1,12 +1,11 @@
-#include "cloth_draw.h"
+#include "forward.h"
 
 namespace Iryven {
 
-void Renderer::ClothDraw::Render(
+void Renderer::ForwardPass::Render(
 	Velos::RHI::ICommandList& commands, const RenderScene& scene)
 {
-	renderer_.DrawCloths(commands, scene);
-	// All opaque geometry, including cloth, must precede transmission.
+	// Composite transmission and text over the deferred lighting result.
 	renderer_.DrawTransmissiveObjects(commands, scene);
 	for (const RenderText& text : scene.texts) {
 		renderer_.DrawText(commands, text);

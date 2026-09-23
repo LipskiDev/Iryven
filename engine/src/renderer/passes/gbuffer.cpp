@@ -1,4 +1,4 @@
-#include "opaque.h"
+#include "gbuffer.h"
 #include "../renderer.h"
 #include "hi_z.h"
 #include <algorithm>
@@ -13,7 +13,7 @@ namespace Iryven {
 			.count();
 	}
 
-	void Renderer::OpaquePass::PreRender(
+	void Renderer::GBufferPass::PreRender(
 		Velos::RHI::ICommandList& commands, const RenderScene& scene)
 	{
 		renderer_.hiZPass_->PrepareForSampling(commands);
@@ -35,7 +35,7 @@ namespace Iryven {
 		}
 	}
 
-	void Renderer::OpaquePass::Render(
+	void Renderer::GBufferPass::Render(
 		Velos::RHI::ICommandList& commands, const RenderScene& scene)
 	{
 		if (!hasCamera_) return;
@@ -43,6 +43,7 @@ namespace Iryven {
 			if (!object.material || object.material->transmission <= 0.0f)
 				renderer_.DrawObject(commands, object, frameData_);
 		}
+		renderer_.DrawCloths(commands, scene);
 	}
 
 	void Renderer::DrawTransmissiveObjects(
@@ -85,7 +86,7 @@ namespace Iryven {
 		}
 	}
 
-	void Renderer::OpaquePass::OnResize(Velos::RHI::IDevice&, std::uint32_t, std::uint32_t) {}
+	void Renderer::GBufferPass::OnResize(Velos::RHI::IDevice&, std::uint32_t, std::uint32_t) {}
 
 }
 

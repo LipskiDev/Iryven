@@ -22,10 +22,11 @@
 #include <shader/shader_compiler.h>
 #include <rhi/upload_context.h>
 
-#include "passes/opaque.h"
+#include "passes/gbuffer.h"
+#include "passes/shading.h"
 #include "passes/hi_z.h"
 #include "passes/cloth_compute.h"
-#include "passes/cloth_draw.h"
+#include "passes/forward.h"
 
 namespace {
 
@@ -106,12 +107,12 @@ namespace Iryven {
 	static_assert(offsetof(GpuMaterial, transmission) == 96);
 	static_assert(offsetof(GpuMaterial, extensionTextures) == 112);
 
-	Renderer::Renderer(Window& window, AssetUploadQueue& assetUploads)
+	Renderer::Renderer(Window& window, AssetUploadQueue& assetUploads, bool enableValidation)
 		: window_(window), assetUploads_(assetUploads)
 	{
 		device_.reset(Velos::RHI::CreateDevice({
 			.graphicsAPI = Velos::RHI::GraphicsAPI::Vulkan,
-			.enableValidation = false,
+			.enableValidation = enableValidation,
 			.applicationName = window_.GetTitle().c_str(),
 		}));
 
@@ -148,47 +149,57 @@ namespace Iryven {
 
 		frameGraphBuilder_.Init(*device_);
 		frameGraph_.Init(frameGraphBuilder_);
-		opaquePass_ = std::make_unique<OpaquePass>(*this);
+		gbufferPass_ = std::make_unique<GBufferPass>(*this);
 		clothCompute_ = std::make_unique<ClothCompute>(*this);
-		clothDraw_ = std::make_unique<ClothDraw>(*this);
-		frameGraphBuilder_.RegisterRenderPass("opaque", *opaquePass_);
+		forwardPass_ = std::make_unique<ForwardPass>(*this);
+		shadingPass_ = std::make_unique<ShadingPass>(*this);
+		frameGraphBuilder_.RegisterRenderPass("gbuffer", *gbufferPass_);
+		frameGraphBuilder_.RegisterRenderPass("shading", *shadingPass_);
 		frameGraphBuilder_.RegisterRenderPass("clothCompute", *clothCompute_);
-		frameGraphBuilder_.RegisterRenderPass("clothDraw", *clothDraw_);
+		frameGraphBuilder_.RegisterRenderPass("forward", *forwardPass_);
 		frameGraphBuilder_.RegisterRenderPass("hiZ", *hiZPass_);
 
-		const Color clearColor = Color::CornflowerBlue;
-		frameGraph_.AddNode({
-			.name = "opaque",
-			.outputs = {
-				{
-					.type = FrameGraphResourceType::Attachment,
-					.info = FrameGraphTextureInfo{
-						.width = static_cast<std::uint32_t>(width),
-						.height = static_cast<std::uint32_t>(height),
-						.format = Velos::RHI::Format::BGRA8_UNORM,
-						.usage = Velos::RHI::ImageUsage::ColorAttachment,
-						.loadOp = RenderPassOperation::Clear,
-						.clearColor = {
-							clearColor.R(), clearColor.G(), clearColor.B(), clearColor.A() },
-					},
-					.external = true,
-					.name = "backbuffer",
-				},
-				{
-					.type = FrameGraphResourceType::Attachment,
-					.info = FrameGraphTextureInfo{
-						.width = static_cast<std::uint32_t>(width),
-						.height = static_cast<std::uint32_t>(height),
-						.format = Velos::RHI::Format::D32_FLOAT,
-						.usage = Velos::RHI::ImageUsage::DepthStencil | Velos::RHI::ImageUsage::Sampled,
-						.loadOp = RenderPassOperation::Clear,
-						.concurrentQueues = true,
-					},
-					.external = true,
-					.name = "depth",
-				},
-			},
-		});
+        std::vector<FrameGraphResourceOutputCreation> gbufferOutputs;
+        for (std::size_t i = 0; i < GBufferNames.size(); ++i) {
+            gbufferOutputs.push_back({.type = FrameGraphResourceType::Attachment,
+                .info = FrameGraphTextureInfo{
+                    .width = static_cast<std::uint32_t>(width),
+                    .height = static_cast<std::uint32_t>(height),
+                    .format = GBufferFormats[i],
+                    .usage = ImageUsage::ColorAttachment | ImageUsage::Sampled,
+                    .loadOp = RenderPassOperation::Clear,
+                    .resizeWithSwapchain = true}, .name = GBufferNames[i]});
+        }
+        gbufferOutputs.push_back({.type = FrameGraphResourceType::Attachment,
+            .info = FrameGraphTextureInfo{
+                .width = static_cast<std::uint32_t>(width),
+                .height = static_cast<std::uint32_t>(height),
+                .format = Format::D32_FLOAT,
+                .usage = ImageUsage::DepthStencil | ImageUsage::Sampled,
+                .loadOp = RenderPassOperation::Clear, .concurrentQueues = true},
+            .external = true, .name = "depth"});
+        std::vector<FrameGraphResourceInputCreation> gbufferInputs;
+        if (clothComputePipeline_) gbufferInputs.push_back({
+            .type = FrameGraphResourceType::Reference, .name = "clothSimulationComplete"});
+        frameGraph_.AddNode({.name = "gbuffer", .inputs = std::move(gbufferInputs),
+            .outputs = std::move(gbufferOutputs)});
+
+        std::vector<FrameGraphResourceInputCreation> shadingInputs;
+        for (const auto* name : GBufferNames) shadingInputs.push_back({
+            .type = FrameGraphResourceType::Texture,
+            .access = FrameGraphAccess::ShaderSampledRead, .name = name});
+        shadingInputs.push_back({.type = FrameGraphResourceType::Texture,
+            .access = FrameGraphAccess::ShaderSampledRead, .name = "depth"});
+        const Color clearColor = Color::CornflowerBlue;
+        frameGraph_.AddNode({.name = "shading", .inputs = std::move(shadingInputs),
+            .outputs = {{.type = FrameGraphResourceType::Attachment,
+                .info = FrameGraphTextureInfo{
+                    .width = static_cast<std::uint32_t>(width),
+                    .height = static_cast<std::uint32_t>(height),
+                    .format = Format::BGRA8_UNORM, .usage = ImageUsage::ColorAttachment,
+                    .loadOp = RenderPassOperation::Clear,
+                    .clearColor = {clearColor.R(), clearColor.G(), clearColor.B(), clearColor.A()}},
+                .external = true, .name = "backbuffer"}}});
 
 		if (clothComputePipeline_) {
 			frameGraph_.AddNode({
@@ -202,14 +213,8 @@ namespace Iryven {
 				.queue = Velos::RHI::QueueType::Compute,
 			});
 		}
-		std::vector<FrameGraphResourceInputCreation> clothDrawInputs;
-		if (clothComputePipeline_) {
-			clothDrawInputs.push_back({
-				.type = FrameGraphResourceType::Reference,
-				.name = "clothSimulationComplete",
-			});
-		}
-		clothDrawInputs.push_back({
+		std::vector<FrameGraphResourceInputCreation> forwardInputs;
+		forwardInputs.push_back({
 			.type = FrameGraphResourceType::Attachment,
 			.access = FrameGraphAccess::ColorAttachmentReadWrite,
 			.info = FrameGraphTextureInfo{
@@ -217,7 +222,7 @@ namespace Iryven {
 			},
 			.name = "backbuffer",
 		});
-		clothDrawInputs.push_back({
+		forwardInputs.push_back({
 			.type = FrameGraphResourceType::Attachment,
 			.access = FrameGraphAccess::DepthStencilReadWrite,
 			.info = FrameGraphTextureInfo{
@@ -226,8 +231,8 @@ namespace Iryven {
 			.name = "depth",
 		});
 		frameGraph_.AddNode({
-			.name = "clothDraw",
-			.inputs = std::move(clothDrawInputs),
+			.name = "forward",
+			.inputs = std::move(forwardInputs),
 			.outputs = {{.type = FrameGraphResourceType::Reference, .name = "opaqueDepthComplete"}},
 		});
 		frameGraph_.AddNode({
@@ -253,9 +258,10 @@ namespace Iryven {
 		device_->WaitIdle();
 		frameGraph_.Shutdown();
 		frameGraphBuilder_.Shutdown();
-		clothDraw_.reset();
+		forwardPass_.reset();
 		clothCompute_.reset();
-		opaquePass_.reset();
+		gbufferPass_.reset();
+		shadingPass_.reset();
 		for (auto& [id, cloth] : cloths_) DestroyGpuCloth(cloth);
 		cloths_.clear();
 		for (auto& retired : retiredCloths_) DestroyGpuCloth(retired.resources);
@@ -305,7 +311,7 @@ namespace Iryven {
 			CreateDepthResources(
 				static_cast<std::uint32_t>(width),
 				static_cast<std::uint32_t>(height));
-			hiZPass_->OnResize(*device_, static_cast<std::uint32_t>(width),
+			frameGraph_.OnResize(*device_, static_cast<std::uint32_t>(width),
 				static_cast<std::uint32_t>(height));
 			swapchainDirty_ = false;
 		}
@@ -1319,7 +1325,20 @@ namespace Iryven {
 			.colorFormat = Velos::RHI::Format::BGRA8_UNORM,
 			.debugName = "Iryven glTF pipeline",
 		};
-		gltfPipeline_ = device_->CreateGraphicsPipeline(gltfDesc);
+        const auto createGBufferShader = [&](const char* path) {
+            const auto code = Velos::ShaderCompiler::CompileFile({.path = path,
+                .stage = ShaderStage::Fragment, .language = Velos::ShaderSourceLanguage::SpirvBinary});
+            return device_->CreateShader({.stage = ShaderStage::Fragment,
+                .bytecode = code.spirv.data(), .bytecodeSize = code.spirv.size() * sizeof(std::uint32_t),
+                .reflection = code.reflection, .debugName = path});
+        };
+        gbufferFragmentShader_ = createGBufferShader("assets/shaders/internal/gbuffer.frag.spv");
+        gbufferMeshletFragmentShader_ = createGBufferShader("assets/shaders/internal/gbuffer_meshlet.frag.spv");
+        gltfDesc.fragmentShader = gbufferFragmentShader_;
+        gltfDesc.colorAttachments = GBufferAttachments();
+        gltfPipeline_ = device_->CreateGraphicsPipeline(gltfDesc);
+        gltfDesc.fragmentShader = gltfFragmentShader_;
+        gltfDesc.colorAttachments.clear();
 		// Thin transmission: C = C_background * transmittance + C_surface.
 		// Disable depth writes so the background remains visible.
 		gltfDesc.depth.depthWriteEnable = false;
@@ -1374,7 +1393,7 @@ namespace Iryven {
 		clothRenderBindingLayout_ = clothGraphicsGeneratedLayout_.setLayouts[2];
 		clothGraphicsPipeline_ = device_->CreateGraphicsPipeline({
 			.vertexShader = clothVertexShader_,
-			.fragmentShader = gltfFragmentShader_,
+			.fragmentShader = gbufferFragmentShader_,
 			.layout = {
 				.descriptorSetLayouts =
 					clothGraphicsGeneratedLayout_.setLayouts.data(),
@@ -1392,8 +1411,8 @@ namespace Iryven {
 				.depthWriteEnable = true,
 				.depthFormat = Velos::RHI::Format::D32_FLOAT,
 			},
-			.colorFormat = Velos::RHI::Format::BGRA8_UNORM,
-			.debugName = "Iryven cloth graphics pipeline",
+			.colorAttachments = GBufferAttachments(),
+			.debugName = "Iryven cloth G-buffer pipeline",
 		});
 
 		const std::filesystem::path clothComputePath =
@@ -1617,7 +1636,11 @@ namespace Iryven {
 			.colorFormat = Velos::RHI::Format::BGRA8_UNORM,
 			.debugName = "Iryven meshlet pipeline",
 			};
-		meshletPipeline_ = device_->CreateMeshPipeline(meshletDesc);
+        meshletDesc.fragmentShader = gbufferMeshletFragmentShader_;
+        meshletDesc.colorAttachments = GBufferAttachments();
+        meshletPipeline_ = device_->CreateMeshPipeline(meshletDesc);
+        meshletDesc.fragmentShader = meshletFragmentShader_;
+        meshletDesc.colorAttachments.clear();
 		// Thin transmission: C = C_background * transmittance + C_surface.
 		// Disable depth writes so the background remains visible.
 		meshletDesc.depth.depthWriteEnable = false;
@@ -1675,7 +1698,9 @@ namespace Iryven {
 	}
 
 	void Renderer::DestroyPipelineResources()
-	{
+    {
+        if (gbufferFragmentShader_) { device_->DestroyShader(gbufferFragmentShader_); gbufferFragmentShader_ = {}; }
+        if (gbufferMeshletFragmentShader_) { device_->DestroyShader(gbufferMeshletFragmentShader_); gbufferMeshletFragmentShader_ = {}; }
 		for (auto& pipeline : meshletTransmissionPipelines_) {
 			if (pipeline) device_->DestroyPipeline(pipeline);
 			pipeline = {};

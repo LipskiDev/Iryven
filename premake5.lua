@@ -97,7 +97,7 @@ project "Iryven"
         buildcommands { '"' .. glslc .. '" --target-env=vulkan1.3 -fshader-stage=vert -o "%{file.abspath}.spv" "%{file.abspath}"' }
         buildoutputs { "%{file.abspath}.spv" }
     filter "files:assets/shaders/internal/**.frag"
-        buildinputs { "assets/shaders/internal/gltf_material.glsl" }
+        buildinputs { "assets/shaders/internal/gltf_material.glsl", "assets/shaders/internal/lighting.glsl", "assets/shaders/internal/frame_uniform.glsl" }
         buildmessage "Compiling %{file.name} to SPIR-V"
         buildcommands { '"' .. glslc .. '" --target-env=vulkan1.3 -fshader-stage=frag -o "%{file.abspath}.spv" "%{file.abspath}"' }
         buildoutputs { "%{file.abspath}.spv" }

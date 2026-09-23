@@ -942,9 +942,8 @@ void FrameGraph::RecordBatch(
 
         const auto resourceSetupStart = CpuClock::now();
 
-        Velos::RHI::ColorAttachmentDesc colorAttachment{};
+        std::vector<Velos::RHI::ColorAttachmentDesc> colorAttachments;
         Velos::RHI::DepthAttachmentDesc depthAttachment{};
-        bool hasColorAttachment = false;
         bool hasDepthAttachment = false;
         std::uint32_t renderWidth = 0;
         std::uint32_t renderHeight = 0;
@@ -1083,15 +1082,12 @@ void FrameGraph::RecordBatch(
                 depthAttachment.clearStencil = useTexture->clearStencil;
                 hasDepthAttachment = true;
             } else {
-                if (hasColorAttachment) {
-                    throw std::logic_error(
-                        "Velos currently supports one color attachment per pass");
-                }
+                Velos::RHI::ColorAttachmentDesc colorAttachment{};
                 colorAttachment.view = texture->view;
                 colorAttachment.loadOp = ToLoadOp(useTexture->loadOp);
                 colorAttachment.storeOp = Velos::RHI::StoreOp::Store;
                 colorAttachment.clearValue = useTexture->clearColor;
-                hasColorAttachment = true;
+                colorAttachments.push_back(colorAttachment);
             }
         };
 
@@ -1128,7 +1124,7 @@ void FrameGraph::RecordBatch(
         node->graphRenderPass->PreRender(commandList, scene);
 		cpuTimings_.preRenderMs += ElapsedMilliseconds(preRenderStart);
 
-        const bool hasAttachments = hasColorAttachment || hasDepthAttachment;
+        const bool hasAttachments = !colorAttachments.empty() || hasDepthAttachment;
 		const auto renderingSetupStart = CpuClock::now();
         if (hasAttachments) {
             commandList.SetViewport({
@@ -1138,8 +1134,8 @@ void FrameGraph::RecordBatch(
             commandList.SetScissor({ .extent = { renderWidth, renderHeight } });
             commandList.BeginRendering({
                 .renderArea = { .extent = { renderWidth, renderHeight } },
-                .colorAttachments = hasColorAttachment ? &colorAttachment : nullptr,
-                .colorAttachmentCount = hasColorAttachment ? 1u : 0u,
+                .colorAttachments = colorAttachments.data(),
+                .colorAttachmentCount = static_cast<std::uint32_t>(colorAttachments.size()),
                 .depthAttachment = hasDepthAttachment ? &depthAttachment : nullptr,
             });
         }

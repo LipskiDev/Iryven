@@ -984,9 +984,16 @@ int RunSmokeTests()
     return 0;
 }
 
-int main()
+int RunDeferredRendererTests();
+void RunDeferredShadingPixelTests();
+
+int main(int argc, char** argv)
 {
     try {
+        if (argc > 1 && std::string(argv[1]) == "--deferred-renderer") {
+            RunDeferredShadingPixelTests();
+            return RunDeferredRendererTests();
+        }
         return RunSmokeTests();
     } catch (const std::exception& error) {
         std::cerr << "Smoke test failed: " << error.what() << '\n';

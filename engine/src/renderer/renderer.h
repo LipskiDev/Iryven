@@ -36,7 +36,8 @@ namespace Iryven {
 
 	class Renderer final : public RenderContext {
 	public:
-		explicit Renderer(Window& window, AssetUploadQueue& assetUploads);
+		explicit Renderer(Window& window, AssetUploadQueue& assetUploads,
+			bool enableValidation = false);
 		~Renderer();
 
 		Renderer(const Renderer&) = delete;
@@ -284,10 +285,11 @@ namespace Iryven {
 		void DestroyGpuCloth(GpuCloth& cloth);
 
 	private:
-		class OpaquePass;
+		class GBufferPass;
+		class ShadingPass;
 		class HiZPass;
 		class ClothCompute;
-		class ClothDraw;
+		class ForwardPass;
 
 		Window& window_;
 		AssetUploadQueue& assetUploads_;
@@ -301,10 +303,11 @@ namespace Iryven {
 		FrameGraphBuilder frameGraphBuilder_;
 		FrameGraph frameGraph_;
 		RendererCpuTimings cpuTimings_{};
-		std::unique_ptr<OpaquePass> opaquePass_;
+		std::unique_ptr<GBufferPass> gbufferPass_;
 		std::unique_ptr<HiZPass> hiZPass_;
+		std::unique_ptr<ShadingPass> shadingPass_;
 		std::unique_ptr<ClothCompute> clothCompute_;
-		std::unique_ptr<ClothDraw> clothDraw_;
+		std::unique_ptr<ForwardPass> forwardPass_;
 
 		std::unordered_map<const MeshData*, GpuMesh> meshes_;
 		std::unordered_map<const Font*, GpuFont> fonts_;
@@ -315,6 +318,8 @@ namespace Iryven {
 		std::uint64_t clothSceneGeneration_ = 0;
 		ShaderHandle gltfVertexShader_;
 		ShaderHandle gltfFragmentShader_;
+		ShaderHandle gbufferFragmentShader_;
+		ShaderHandle gbufferMeshletFragmentShader_;
 		PipelineHandle gltfPipeline_;
 		std::array<PipelineHandle, 2> gltfTransmissionPipelines_{};
 		GeneratedPipelineLayout gltfGeneratedLayout_;

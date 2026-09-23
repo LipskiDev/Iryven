@@ -7,9 +7,9 @@ namespace Iryven {
 
 	[[nodiscard]] float ElapsedMilliseconds(CpuClock::time_point start);
 
-	class Renderer::OpaquePass final : public FrameGraphRenderPass {
+	class Renderer::GBufferPass final : public FrameGraphRenderPass {
 	public:
-		explicit OpaquePass(Renderer& renderer) : renderer_(renderer) {}
+		explicit GBufferPass(Renderer& renderer) : renderer_(renderer) {}
 
 		void AddUI() override {}
 

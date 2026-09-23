@@ -4,9 +4,9 @@
 
 namespace Iryven {
 
-class Renderer::ClothDraw final : public FrameGraphRenderPass {
+class Renderer::ForwardPass final : public FrameGraphRenderPass {
 public:
-	explicit ClothDraw(Renderer& renderer) : renderer_(renderer) {}
+	explicit ForwardPass(Renderer& renderer) : renderer_(renderer) {}
 
 	void AddUI() override {}
 	void PreRender(Velos::RHI::ICommandList&, const RenderScene&) override {}
