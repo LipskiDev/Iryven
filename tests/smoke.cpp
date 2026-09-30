@@ -350,6 +350,45 @@ int RunSmokeTests()
         assert(batches[2].dependencies[0] == 1);
 
         graph.Reset();
+        graph.AddNode({.name = "light-cull",
+            .outputs = {{.type = Iryven::FrameGraphResourceType::Reference, .name = "lights-ready"}},
+            .queue = Velos::RHI::QueueType::Compute});
+        graph.AddNode({.name = "independent-gbuffer",
+            .outputs = {{.type = Iryven::FrameGraphResourceType::Reference, .name = "gbuffer-ready"}}});
+        graph.AddNode({.name = "lighting",
+            .inputs = {{.type = Iryven::FrameGraphResourceType::Reference, .name = "lights-ready"},
+                {.type = Iryven::FrameGraphResourceType::Reference, .name = "gbuffer-ready"}}});
+        graph.Compile();
+        const auto asyncBatches = graph.ExecutionBatches();
+        assert(asyncBatches.size() == 3);
+        assert(asyncBatches[0].queue == Velos::RHI::QueueType::Compute);
+        assert(asyncBatches[1].queue == Velos::RHI::QueueType::Graphics);
+        assert(asyncBatches[1].dependencies.empty());
+        assert(asyncBatches[2].nodes.size() == 1);
+        assert(asyncBatches[2].dependencies.size() == 2);
+
+        graph.Reset();
+        graph.AddNode({.name = "cloth",
+            .outputs = {{.type = Iryven::FrameGraphResourceType::Reference, .name = "cloth-ready"}},
+            .queue = Velos::RHI::QueueType::Compute});
+        graph.AddNode({.name = "tiling",
+            .outputs = {{.type = Iryven::FrameGraphResourceType::Reference, .name = "tiles-ready"}},
+            .queue = Velos::RHI::QueueType::Compute});
+        graph.AddNode({.name = "gbuffer",
+            .inputs = {{.type = Iryven::FrameGraphResourceType::Reference, .name = "cloth-ready"}},
+            .outputs = {{.type = Iryven::FrameGraphResourceType::Reference, .name = "gbuffer-ready"}}});
+        graph.AddNode({.name = "shading",
+            .inputs = {{.type = Iryven::FrameGraphResourceType::Reference, .name = "tiles-ready"},
+                {.type = Iryven::FrameGraphResourceType::Reference, .name = "gbuffer-ready"}}});
+        graph.Compile();
+        const auto clothBatches = graph.ExecutionBatches();
+        assert(clothBatches.size() == 4);
+        assert(graph.AccessNode(clothBatches[0].nodes.front())->name == "cloth");
+        assert(graph.AccessNode(clothBatches[1].nodes.front())->name == "tiling");
+        assert(clothBatches[2].dependencies == std::vector<std::size_t>{0});
+        assert(clothBatches[3].dependencies.size() == 2);
+
+        graph.Reset();
         graph.AddNode({
             .name = "a",
             .inputs = {{ .name = "b-out" }},
@@ -985,12 +1024,19 @@ int RunSmokeTests()
 }
 
 int RunDeferredRendererTests();
-void RunDeferredShadingPixelTests();
+void RunDeferredShadingPixelTests(bool benchmark = false, const char* fragmentPath = nullptr);
+void RunLightTilingTests(bool benchmark = false, const char* shaderPath = nullptr);
 
 int main(int argc, char** argv)
 {
     try {
+        if (argc > 1 && std::string(argv[1]) == "--lighting-benchmark") {
+            RunLightTilingTests(true, argc > 3 ? argv[3] : nullptr);
+            RunDeferredShadingPixelTests(true, argc > 2 ? argv[2] : nullptr);
+            return 0;
+        }
         if (argc > 1 && std::string(argv[1]) == "--deferred-renderer") {
+            RunLightTilingTests();
             RunDeferredShadingPixelTests();
             return RunDeferredRendererTests();
         }

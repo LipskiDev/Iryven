@@ -9,7 +9,7 @@ layout(set = 1, binding = 1) uniform sampler2D normalRoughness;
 layout(set = 1, binding = 2) uniform sampler2D emissiveOcclusion;
 layout(set = 1, binding = 3) uniform sampler2D specular;
 layout(set = 1, binding = 4) uniform sampler2D sceneDepth;
-layout(push_constant) uniform ShadingConstants { mat4 inverseViewProjection; } shading;
+layout(push_constant) uniform ShadingConstants { mat4 inverseViewProjection; uint lightCountView; } shading;
 layout(location = 0) out vec4 outputColor;
 
 void main() {
@@ -26,6 +26,6 @@ void main() {
     vec4 f0 = texelFetch(specular, pixel, 0);
     vec3 lighting = EvaluateDirectLighting(worldPosition, normalize(nr.xyz),
         normalize(cameraPosition.xyz - worldPosition), base.rgb, base.a, nr.a,
-        emissive.a, f0.rgb, f0.a > 0.5, 0.0);
-    outputColor = vec4(lighting + emissive.rgb, 1.0);
+        emissive.a, f0.rgb, f0.a > 0.5, 0.0, shading.lightCountView != 0u);
+    outputColor = vec4(lighting + (shading.lightCountView != 0u ? vec3(0.0) : emissive.rgb), 1.0);
 }

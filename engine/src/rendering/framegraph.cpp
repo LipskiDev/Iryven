@@ -5,6 +5,7 @@
 #include <chrono>
 #include <deque>
 #include <stdexcept>
+#include <sstream>
 #include <unordered_set>
 #include <utility>
 
@@ -841,15 +842,45 @@ void FrameGraph::Compile()
 
     std::vector<std::size_t> nodeBatches(
         nodes_.size(), std::numeric_limits<std::size_t>::max());
+    std::vector<std::vector<FrameGraphNodeHandle>> parents(nodes_.size());
+    for (auto handle : executionOrder_)
+        for (auto child : AccessNode(handle)->edges) parents[child.handle].push_back(handle);
+    bool previousReleasesOtherQueue = false;
     for (FrameGraphNodeHandle handle : executionOrder_) {
         const FrameGraphNode* node = AccessNode(handle);
+        // A newly introduced cross-queue wait must not stall independent nodes
+        // already in the batch (e.g. G-buffer draws before light-culling's consumer).
+        bool introducesWait = false;
+        if (!executionBatches_.empty()) {
+            const auto& dependencies = executionBatches_.back().dependencies;
+            for (auto parent : parents[handle.handle]) {
+                if (QueueRelationship(AccessNode(parent)->queue, node->queue) !=
+                    Velos::RHI::QueueRelationship::SameQueue &&
+                    std::find(dependencies.begin(), dependencies.end(), nodeBatches[parent.handle]) == dependencies.end())
+                    introducesWait = true;
+            }
+        }
         if (executionBatches_.empty() ||
             QueueRelationship(executionBatches_.back().queue, node->queue) !=
-                Velos::RHI::QueueRelationship::SameQueue) {
+                Velos::RHI::QueueRelationship::SameQueue || introducesWait || previousReleasesOtherQueue) {
             executionBatches_.push_back({ .queue = node->queue });
         }
         nodeBatches[handle.handle] = executionBatches_.size() - 1;
         executionBatches_.back().nodes.push_back(handle);
+        for (auto parent : parents[handle.handle]) {
+            const auto parentBatch = nodeBatches[parent.handle];
+            auto& dependencies = executionBatches_.back().dependencies;
+            if (parentBatch != executionBatches_.size() - 1 &&
+                std::find(dependencies.begin(), dependencies.end(), parentBatch) == dependencies.end())
+                dependencies.push_back(parentBatch);
+        }
+        // Signal promptly when another queue consumes this pass. Appending
+        // unrelated work would delay that consumer until the whole batch ends.
+        previousReleasesOtherQueue = std::any_of(node->edges.begin(), node->edges.end(),
+            [&](FrameGraphNodeHandle child) {
+                return QueueRelationship(node->queue, AccessNode(child)->queue) !=
+                    Velos::RHI::QueueRelationship::SameQueue;
+            });
     }
 
     for (FrameGraphNodeHandle parentHandle : executionOrder_) {
@@ -865,6 +896,50 @@ void FrameGraph::Compile()
             }
         }
     }
+}
+
+std::string FrameGraph::DescribeExecutionBatches() const
+{
+    std::ostringstream result;
+    const auto queueName = [](Velos::RHI::QueueType queue) {
+        switch (queue) {
+        case Velos::RHI::QueueType::Compute: return "Compute";
+        case Velos::RHI::QueueType::Transfer: return "Transfer";
+        default: return "Graphics";
+        }
+    };
+    result << "Framegraph compiled submissions (runtime history waits not included):\n";
+    for (std::size_t index = 0; index < executionBatches_.size(); ++index) {
+        const auto& batch = executionBatches_[index];
+        result << "Batch " << index << " [" << queueName(batch.queue) << "]: ";
+        for (std::size_t i = 0; i < batch.nodes.size(); ++i) {
+            if (i) result << " -> ";
+            result << AccessNode(batch.nodes[i])->name;
+        }
+        result << "\n  Cross-queue waits:";
+        bool any = false;
+        for (auto dependency : batch.dependencies) {
+            if (QueueRelationship(executionBatches_[dependency].queue, batch.queue) ==
+                Velos::RHI::QueueRelationship::SameQueue) continue;
+            result << " batch " << dependency;
+            any = true;
+        }
+        if (!any) result << " none";
+        result << '\n';
+        for (auto handle : batch.nodes) {
+            const auto* node = AccessNode(handle);
+            for (auto inputHandle : node->inputs) {
+                const auto* input = AccessResource(inputHandle);
+                const auto* resource = input->outputHandle.IsValid()
+                    ? AccessResource(input->outputHandle) : nullptr;
+                const auto* producer = resource && resource->producer.IsValid()
+                    ? AccessNode(resource->producer) : nullptr;
+                result << "  " << node->name << " <- " << input->name << " <- "
+                    << (producer ? producer->name : "external") << '\n';
+            }
+        }
+    }
+    return result.str();
 }
 
 void FrameGraph::AddUI()

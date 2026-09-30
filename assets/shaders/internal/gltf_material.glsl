@@ -124,7 +124,7 @@ void ShadeMaterial(uint materialIndex, uint phase) {
     vec3 lighting = EvaluateDirectLighting(
         worldPosition, normal, viewDirection, baseColor.rgb,
         metallic, clamp(filteredRoughness, 0.045, 1.0), ambientOcclusion,
-        f0, specularGlossiness, transmission);
+        f0, specularGlossiness, transmission, false);
 
     // Thin-surface transmission uses two sorted draws: destination attenuation,
     // then additive surface lighting. Fresnel reflection is never faded by transmission.

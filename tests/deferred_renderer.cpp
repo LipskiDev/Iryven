@@ -40,6 +40,8 @@ int RunDeferredRendererTests()
     RenderScene scene;
     scene.camera = RenderCamera{};
     scene.lights.push_back({});
+    scene.lights.push_back({.type = LightType::Point, .position = {0, 0, -2}, .range = 4});
+    scene.lights.push_back({.type = LightType::Spot, .position = {1, 0, -2}, .range = 4});
     scene.objects.push_back({.mesh = mesh, .material = material});
     scene.objects.push_back({.transform = glm::translate(glm::mat4(1), glm::vec3(1, 0, 0)),
         .mesh = meshletMesh, .material = material});
@@ -51,7 +53,7 @@ int RunDeferredRendererTests()
     scene.deltaTime = 1.0f / 60.0f;
     int rendered = 0;
     for (int frame = 0; frame < 12; ++frame) {
-        if (frame == 6) glfwSetWindowSize(native, 128, 80);
+        if (frame == 6) glfwSetWindowSize(native, 127, 79);
         window->PollEvents();
         if (!renderer.BeginFrame()) continue;
         renderer.DrawScene(frame == 0 || frame == 11 ? RenderScene{} : scene);

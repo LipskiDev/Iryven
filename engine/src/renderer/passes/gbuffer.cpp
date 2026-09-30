@@ -17,10 +17,6 @@ namespace Iryven {
 		Velos::RHI::ICommandList& commands, const RenderScene& scene)
 	{
 		renderer_.hiZPass_->PrepareForSampling(commands);
-		const auto lightsStart = CpuClock::now();
-		renderer_.UploadLights(commands, scene.lights);
-		renderer_.cpuTimings_.uploadLightsMs += ElapsedMilliseconds(lightsStart);
-
 		const auto materialsStart = CpuClock::now();
 		renderer_.UploadMaterials(commands, scene);
 		renderer_.cpuTimings_.uploadMaterialsMs +=
@@ -89,4 +85,3 @@ namespace Iryven {
 	void Renderer::GBufferPass::OnResize(Velos::RHI::IDevice&, std::uint32_t, std::uint32_t) {}
 
 }
-

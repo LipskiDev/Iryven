@@ -1,0 +1,49 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "light_buffer.glsl"
+#include "light_tiles.glsl"
+
+layout(std140, set = 0, binding = 1) uniform CullingData {
+    mat4 view;
+    mat4 projection;
+    uvec4 viewport; // width, height, tile columns, tile rows
+};
+
+layout(local_size_x = 64) in;
+shared uint tileMask[16];
+
+bool OutsidePlane(vec4 plane, vec3 center, float radius) {
+    return dot(plane, vec4(center, 1.0)) < -(radius + 0.0001) * length(plane.xyz);
+}
+
+void main() {
+    uvec2 tile = gl_WorkGroupID.xy;
+    uint lane = gl_LocalInvocationIndex;
+    if (any(greaterThanEqual(tile, viewport.zw))) return;
+    if (lane < LIGHT_TILE_WORDS) tileMask[lane] = 0u;
+    barrier();
+
+    vec2 lo = vec2(tile * LIGHT_TILE_SIZE) / vec2(viewport.xy) * 2.0 - 1.0;
+    vec2 hi = vec2(min((tile + 1u) * LIGHT_TILE_SIZE, viewport.xy)) / vec2(viewport.xy) * 2.0 - 1.0;
+    mat4 rows = transpose(projection);
+    vec4 left = rows[0] - lo.x * rows[3];
+    vec4 right = hi.x * rows[3] - rows[0];
+    vec4 top = rows[1] - lo.y * rows[3];
+    vec4 bottom = hi.y * rows[3] - rows[1];
+
+    for (uint localIndex = lane; localIndex < min(lightHeader.w, MAX_LIGHTS); localIndex += 64u) {
+        GpuLight light = lights[lightHeader.z + localIndex];
+        vec3 center = (view * vec4(light.positionAndType.xyz, 1.0)).xyz;
+        float radius = max(light.directionAndRange.w, 0.0001);
+        if (!OutsidePlane(left, center, radius) && !OutsidePlane(right, center, radius) &&
+            !OutsidePlane(top, center, radius) && !OutsidePlane(bottom, center, radius))
+            atomicOr(tileMask[localIndex / 32u], 1u << (localIndex % 32u));
+    }
+    barrier();
+
+    uint offset = (tile.y * viewport.z + tile.x) * LIGHT_TILE_WORDS;
+    if (lane < LIGHT_TILE_WORDS) lightTileMasks[offset + lane] = tileMask[lane];
+    if (all(equal(tile, uvec2(0))) && lane == 0u)
+        lightTileHeader = uvec4(viewport.zw, LIGHT_TILE_SIZE, LIGHT_TILE_WORDS);
+}

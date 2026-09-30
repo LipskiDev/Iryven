@@ -84,6 +84,7 @@ public:
     std::unique_ptr<Layer> PopOverlay(Layer& overlay);
 
     void Run();
+    void SetLightCountView(bool enabled);
 
 private:
     void OnEvent(Event& event);

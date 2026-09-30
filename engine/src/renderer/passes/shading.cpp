@@ -69,7 +69,9 @@ void Renderer::ShadingPass::Render(ICommandList& commands, const RenderScene& sc
     commands.BindPipeline(pipeline_);
     commands.SetBindings(pipeline_, 0, renderer_.lightingFrames_.at(renderer_.frame_.frameIndex).lightBindingSet);
     commands.SetBindings(pipeline_, 1, sets_.at(renderer_.frame_.frameIndex));
-    commands.PushConstants(ShaderStage::Fragment, 0, sizeof(inverseViewProjection), &inverseViewProjection);
+    struct Constants { glm::mat4 inverseViewProjection; std::uint32_t lightCountView; };
+    const Constants constants{inverseViewProjection, renderer_.lightCountView_ ? 1u : 0u};
+    commands.PushConstants(ShaderStage::Fragment, 0, 68, &constants);
     commands.Draw(3);
 }
 }

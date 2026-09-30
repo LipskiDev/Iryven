@@ -31,11 +31,26 @@ namespace {
 
 	class FpsOverlay final : public Iryven::Layer {
 	public:
-		explicit FpsOverlay(const Iryven::Engine& engine)
+		explicit FpsOverlay(Iryven::Engine& engine)
 			: Layer("CPU Timing Overlay"), engine_(engine) {}
 
 		void OnImGuiRender() override
 		{
+			ImGui::Begin("Lighting debug");
+			if (ImGui::Checkbox("Lights affecting pixel (opaque)", &lightCountView_))
+				engine_.SetLightCountView(lightCountView_);
+			if (lightCountView_) {
+				ImGui::TextUnformatted("Positive light energy, in range/cone, facing surface.");
+				const ImVec4 colors[]{{0,0,0,1},{0,0,1,1},{0,1,1,1},{0,1,0,1},{1,1,0,1},{1,0,0,1},{1,0,1,1}};
+				const char* labels[]{"0", "1-4", "5-8", "9-16", "17-32", "33-64", "65+"};
+				for (int i=0; i<7; ++i) {
+					ImGui::PushID(i);
+					ImGui::ColorButton("##band", colors[i], ImGuiColorEditFlags_NoTooltip, ImVec2(18,18));
+					ImGui::SameLine(); ImGui::TextUnformatted(labels[i]); ImGui::PopID();
+				}
+				ImGui::TextUnformatted("Diagnostic mode skips BRDF work; timings are not representative.");
+			}
+			ImGui::End();
 			const ImGuiIO& io = ImGui::GetIO();
 			const Iryven::CpuFrameTimings& sample = engine_.GetCpuFrameTimings();
 			if (!initialized_ && sample.frameMs > 0.0f) {
@@ -134,7 +149,8 @@ namespace {
 		}
 
 	private:
-		const Iryven::Engine& engine_;
+		Iryven::Engine& engine_;
+		bool lightCountView_ = false;
 		Iryven::CpuFrameTimings timings_{};
 		bool initialized_ = false;
 	};
@@ -184,10 +200,9 @@ int main()
 	engine.PushOverlay(std::make_unique<FpsOverlay>(engine));
 
 	// Bistro is an optional local asset; a fresh clone uses the tracked Sponza scene.
-	const bool hasBistro = std::filesystem::exists("assets/models/Bistro_Godot.glb");
-	auto sceneAsset = engine.GetAsyncLoader().RequestModel(hasBistro
-		? "assets/models/Bistro_Godot.glb" : "assets/models/sponza/Sponza.gltf");
-	auto sceneEntity = engine.GetWorld().CreateEntity(hasBistro ? "Bistro" : "Sponza");
+	auto sceneAsset = engine.GetAsyncLoader().RequestModel("assets/models/sponza/Sponza.gltf");
+
+	auto sceneEntity = engine.GetWorld().CreateEntity("Sponza");
 	sceneEntity.Add<Iryven::Transform>(Iryven::Transform{
 		.position = glm::vec3{0.0f, 0.0f, 0.0f},
 		});
@@ -203,39 +218,40 @@ int main()
 		.verticalFov = 52.0f,
 	});
 
-	//for (int i = 0; i < 10; i++) {
-	//	auto light = world.CreateEntity("Point Light " + std::to_string(i));
-	//	light.Add<Iryven::Transform>(Iryven::Transform{
-	//			.position = glm::vec3{
-	//				-10.0f + static_cast<float>(rand()) / (static_cast<float>(RAND_MAX / 20.0f)),
-	//				1.0f + static_cast<float>(rand()) / (static_cast<float>(RAND_MAX / 5.0f)),
-	//				-10.0f + static_cast<float>(rand()) / (static_cast<float>(RAND_MAX / 20.0f))
-	//			},
-	//		});
+	for (uint32_t i = 0; i < 256; i++) {
+		auto light = world.CreateEntity("Point Light " + std::to_string(i));
+		light.Add<Iryven::Transform>(Iryven::Transform{
+			.position = glm::vec3{
+				-10.0f + 20.0f * static_cast<float>(std::rand()) / RAND_MAX,
+				1.0f + 5.0f * static_cast<float>(std::rand()) / RAND_MAX,
+				-10.0f + 20.0f * static_cast<float>(std::rand()) / RAND_MAX,
+			},
+			});
 
-	//	light.Add<Iryven::Light>(Iryven::Light{
-	//			.type = Iryven::LightType::Point,
-	//			.color = Iryven::Color{
-	//				static_cast<float>(rand()) / static_cast<float>(RAND_MAX),
-	//				static_cast<float>(rand()) / static_cast<float>(RAND_MAX),
-	//				static_cast<float>(rand()) / static_cast<float>(RAND_MAX),
-	//				1.0f
-	//			},
-	//			.intensity = 10.5f,
-	//			.range = 10.0,
-	//		});
-	//}
+		light.Add<Iryven::Light>(Iryven::Light{
+			.type = Iryven::LightType::Point,
+			.color = Iryven::Color{
+				static_cast<float>(std::rand()) / RAND_MAX,
+				static_cast<float>(std::rand()) / RAND_MAX,
+				static_cast<float>(std::rand()) / RAND_MAX,
+				1.0f,
+			},
+			.intensity = 10.5f,
+			.range = 3.0f,
 
-	auto light = world.CreateEntity("Directional Light");
-	light.Add<Iryven::Transform>(Iryven::Transform{
-		.position = glm::vec3{0.0f, 10.0f, 0.0f},
-		.rotation = glm::normalize(glm::angleAxis(glm::radians(-45.0f), glm::vec3{1.0f, 1.0f, 0.0f})),
-	});
-	light.Add<Iryven::Light>(Iryven::Light{
-		.type = Iryven::LightType::Directional,
-		.color = Iryven::Color{1.0f, 1.0f, 1.0f, 1.0f},
-		.intensity = 10.0f,
-	});
+		});
+	}
+
+	//auto light = world.CreateEntity("Directional Light");
+	//light.Add<Iryven::Transform>(Iryven::Transform{
+	//	.position = glm::vec3{0.0f, 10.0f, 0.0f},
+	//	.rotation = glm::normalize(glm::angleAxis(glm::radians(-45.0f), glm::vec3{1.0f, 1.0f, 0.0f})),
+	//});
+	//light.Add<Iryven::Light>(Iryven::Light{
+	//	.type = Iryven::LightType::Directional,
+	//	.color = Iryven::Color{1.0f, 1.0f, 1.0f, 1.0f},
+	//	.intensity = 10.0f,
+	//});
 
 	//auto cloth = world.CreateEntity("Cloth");
 	//cloth.Add<Iryven::Transform>(Iryven::Transform{

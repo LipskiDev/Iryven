@@ -55,6 +55,7 @@ namespace Iryven {
 		}
 		void DrawScene(const RenderScene& renderScene) override;
 		void ToggleCullingCameraFreeze();
+		void SetLightCountView(bool enabled) { lightCountView_ = enabled; }
 		void InitializeImGui();
 		void ShutdownImGui();
 		void BeginImGuiFrame();
@@ -89,7 +90,7 @@ namespace Iryven {
 		void DrawTransmissiveObjects(Velos::RHI::ICommandList& commands,
 			const RenderScene& scene);
 		void UploadLights(Velos::RHI::ICommandList& commands,
-			const std::vector<RenderLight>& lights);
+			const std::vector<RenderLight>& lights, std::uint32_t directionalLightCount);
 		void UploadFrameData(Velos::RHI::ICommandList& commands,
 			const FrameData& frameData);
 		void UploadMaterials(Velos::RHI::ICommandList& commands,
@@ -266,14 +267,15 @@ namespace Iryven {
 			std::uint64_t size,
 			BufferUsage usage,
 			const char* gpuDebugName,
-			const char* uploadDebugName);
+			const char* uploadDebugName, bool concurrentQueues = false);
 		void DestroyUploadBackedBuffer(UploadBackedBuffer& buffer);
 		void UploadBuffer(
 			ICommandList& commands,
 			UploadBackedBuffer& buffer,
 			const void* data,
 			std::uint64_t size,
-			Velos::RHI::ResourceState finalState);
+			Velos::RHI::ResourceState finalState,
+			Velos::RHI::QueueType queue = Velos::RHI::QueueType::Graphics);
 
 		[[nodiscard]] GpuMesh* ResolveOrCreateMesh(
 			const std::shared_ptr<const MeshData>& mesh);
@@ -286,6 +288,7 @@ namespace Iryven {
 
 	private:
 		class GBufferPass;
+		class LightCullingPass;
 		class ShadingPass;
 		class HiZPass;
 		class ClothCompute;
@@ -303,7 +306,9 @@ namespace Iryven {
 		FrameGraphBuilder frameGraphBuilder_;
 		FrameGraph frameGraph_;
 		RendererCpuTimings cpuTimings_{};
+		bool lightCountView_ = false;
 		std::unique_ptr<GBufferPass> gbufferPass_;
+		std::unique_ptr<LightCullingPass> lightCullingPass_;
 		std::unique_ptr<HiZPass> hiZPass_;
 		std::unique_ptr<ShadingPass> shadingPass_;
 		std::unique_ptr<ClothCompute> clothCompute_;

@@ -286,6 +286,8 @@ public:
         return executionBatches_;
     }
 
+    [[nodiscard]] std::string DescribeExecutionBatches() const;
+
     [[nodiscard]] std::span<const Velos::RHI::TimelineSemaphorePoint>
     GraphicsSubmissionWaits() const noexcept
     {

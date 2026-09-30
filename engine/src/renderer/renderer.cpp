@@ -23,6 +23,7 @@
 #include <rhi/upload_context.h>
 
 #include "passes/gbuffer.h"
+#include "passes/light_culling.h"
 #include "passes/shading.h"
 #include "passes/hi_z.h"
 #include "passes/cloth_compute.h"
@@ -150,14 +151,42 @@ namespace Iryven {
 		frameGraphBuilder_.Init(*device_);
 		frameGraph_.Init(frameGraphBuilder_);
 		gbufferPass_ = std::make_unique<GBufferPass>(*this);
+		lightCullingPass_ = std::make_unique<LightCullingPass>(*this);
 		clothCompute_ = std::make_unique<ClothCompute>(*this);
 		forwardPass_ = std::make_unique<ForwardPass>(*this);
 		shadingPass_ = std::make_unique<ShadingPass>(*this);
 		frameGraphBuilder_.RegisterRenderPass("gbuffer", *gbufferPass_);
+		frameGraphBuilder_.RegisterRenderPass("lightCulling", *lightCullingPass_);
 		frameGraphBuilder_.RegisterRenderPass("shading", *shadingPass_);
 		frameGraphBuilder_.RegisterRenderPass("clothCompute", *clothCompute_);
 		frameGraphBuilder_.RegisterRenderPass("forward", *forwardPass_);
 		frameGraphBuilder_.RegisterRenderPass("hiZ", *hiZPass_);
+
+        // Cloth must signal before tiling so its graphics consumer can start early.
+		if (clothComputePipeline_) {
+			frameGraph_.AddNode({
+				.name = "clothCompute",
+				.outputs = {
+					{
+						.type = FrameGraphResourceType::Reference,
+						.name = "clothSimulationComplete",
+					},
+				},
+				.queue = Velos::RHI::QueueType::Compute,
+			});
+		}
+
+        // graph waits for these compute outputs before lighting consumes them.
+        frameGraph_.AddNode({.name = "lightCulling",
+            .outputs = {{.type = FrameGraphResourceType::Buffer,
+                .access = FrameGraphAccess::ShaderStorageWrite,
+                .info = lightCullingPass_->TileBufferInfo(),
+                .external = true, .name = "lightTiles"},
+                {.type = FrameGraphResourceType::Buffer,
+                .access = FrameGraphAccess::TransferWrite,
+                .info = lightCullingPass_->DepthBinBufferInfo(),
+                .external = true, .name = "lightDepthBins"}},
+            .queue = QueueType::Compute});
 
         std::vector<FrameGraphResourceOutputCreation> gbufferOutputs;
         for (std::size_t i = 0; i < GBufferNames.size(); ++i) {
@@ -185,6 +214,10 @@ namespace Iryven {
             .outputs = std::move(gbufferOutputs)});
 
         std::vector<FrameGraphResourceInputCreation> shadingInputs;
+        shadingInputs.push_back({.type = FrameGraphResourceType::Buffer,
+            .access = FrameGraphAccess::ShaderStorageRead, .name = "lightTiles"});
+        shadingInputs.push_back({.type = FrameGraphResourceType::Buffer,
+            .access = FrameGraphAccess::ShaderStorageRead, .name = "lightDepthBins"});
         for (const auto* name : GBufferNames) shadingInputs.push_back({
             .type = FrameGraphResourceType::Texture,
             .access = FrameGraphAccess::ShaderSampledRead, .name = name});
@@ -201,19 +234,11 @@ namespace Iryven {
                     .clearColor = {clearColor.R(), clearColor.G(), clearColor.B(), clearColor.A()}},
                 .external = true, .name = "backbuffer"}}});
 
-		if (clothComputePipeline_) {
-			frameGraph_.AddNode({
-				.name = "clothCompute",
-				.outputs = {
-					{
-						.type = FrameGraphResourceType::Reference,
-						.name = "clothSimulationComplete",
-					},
-				},
-				.queue = Velos::RHI::QueueType::Compute,
-			});
-		}
 		std::vector<FrameGraphResourceInputCreation> forwardInputs;
+		forwardInputs.push_back({.type = FrameGraphResourceType::Buffer,
+			.access = FrameGraphAccess::ShaderStorageRead, .name = "lightTiles"});
+		forwardInputs.push_back({.type = FrameGraphResourceType::Buffer,
+			.access = FrameGraphAccess::ShaderStorageRead, .name = "lightDepthBins"});
 		forwardInputs.push_back({
 			.type = FrameGraphResourceType::Attachment,
 			.access = FrameGraphAccess::ColorAttachmentReadWrite,
@@ -247,6 +272,9 @@ namespace Iryven {
 			.queue = Velos::RHI::QueueType::Compute,
 		});
 		frameGraph_.Compile();
+#ifdef IRYVEN_DEBUG
+		IRYVEN_CORE_INFO("{}", frameGraph_.DescribeExecutionBatches());
+#endif
 	}
 
 	Renderer::~Renderer()
@@ -261,6 +289,7 @@ namespace Iryven {
 		forwardPass_.reset();
 		clothCompute_.reset();
 		gbufferPass_.reset();
+		lightCullingPass_.reset();
 		shadingPass_.reset();
 		for (auto& [id, cloth] : cloths_) DestroyGpuCloth(cloth);
 		cloths_.clear();
@@ -355,6 +384,8 @@ namespace Iryven {
 		depthInfo.height = graphDimensions.height;
 		depthInfo.handle = depthImage_;
 		depthInfo.view = depthView_;
+		frameGraph_.GetResource("lightTiles")->info = lightCullingPass_->TileBufferInfo();
+		frameGraph_.GetResource("lightDepthBins")->info = lightCullingPass_->DepthBinBufferInfo();
 
 		frameActive_ = true;
 		return true;
@@ -820,13 +851,14 @@ namespace Iryven {
 		std::uint64_t size,
 		Velos::RHI::BufferUsage usage,
 		const char* gpuDebugName,
-		const char* uploadDebugName)
+		const char* uploadDebugName, bool concurrentQueues)
 	{
 		UploadBackedBuffer buffer;
 		buffer.gpuBuffer = device_->CreateBuffer({
 			.size = size,
 			.usage = usage | Velos::RHI::BufferUsage::TransferDst,
 			.memoryUsage = Velos::RHI::MemoryUsage::GPUOnly,
+			.concurrentQueues = concurrentQueues,
 			.debugName = gpuDebugName,
 		});
 		try {
@@ -859,7 +891,7 @@ namespace Iryven {
 		UploadBackedBuffer& buffer,
 		const void* data,
 		std::uint64_t size,
-		Velos::RHI::ResourceState finalState)
+		Velos::RHI::ResourceState finalState, Velos::RHI::QueueType queue)
 	{
 		commands.UpdateBuffer({
 			.buffer = buffer.uploadBuffer,
@@ -871,6 +903,7 @@ namespace Iryven {
 			.buffer = buffer.gpuBuffer,
 			.oldState = buffer.state,
 			.newState = Velos::RHI::ResourceState::TransferDst,
+			.sourceQueue = queue, .destinationQueue = queue,
 		});
 		commands.CopyBuffer(
 			buffer.uploadBuffer,
@@ -880,6 +913,7 @@ namespace Iryven {
 			.buffer = buffer.gpuBuffer,
 			.oldState = Velos::RHI::ResourceState::TransferDst,
 			.newState = finalState,
+			.sourceQueue = queue, .destinationQueue = queue,
 		});
 		buffer.state = finalState;
 	}
@@ -979,7 +1013,7 @@ namespace Iryven {
 
 	void Renderer::UploadLights(
 		Velos::RHI::ICommandList& commands,
-		const std::vector<RenderLight>& lights)
+		const std::vector<RenderLight>& lights, std::uint32_t directionalLightCount)
 	{
 		struct alignas(16) GpuLight {
 			glm::vec4 positionAndType;
@@ -996,6 +1030,10 @@ namespace Iryven {
 		GpuLights gpuLights;
 		const std::size_t lightCount = std::min<std::size_t>(lights.size(), k_MaxLightSources);
 		gpuLights.metadata.x = static_cast<std::uint32_t>(lightCount);
+		// x=total count, y=directional count, z=local offset, w=local count.
+		gpuLights.metadata.y = std::min(directionalLightCount, gpuLights.metadata.x);
+		gpuLights.metadata.z = gpuLights.metadata.y;
+		gpuLights.metadata.w = gpuLights.metadata.x - gpuLights.metadata.y;
 		for (std::size_t i = 0; i < lightCount; ++i) {
 			const RenderLight& source = lights[i];
 			gpuLights.lights[i] = GpuLight{
@@ -1013,7 +1051,7 @@ namespace Iryven {
 			lightingFrames_.at(frame_.frameIndex).lightBuffer,
 			&gpuLights,
 			sizeof(gpuLights),
-			Velos::RHI::ResourceState::UniformBuffer);
+			Velos::RHI::ResourceState::ShaderRead, Velos::RHI::QueueType::Compute);
 	}
 
 	void Renderer::ToggleCullingCameraFreeze()
@@ -2508,11 +2546,11 @@ namespace Iryven {
 		const Velos::RHI::BindingPoolSize poolSizes[]{
 			{
 				.type = Velos::RHI::BindingType::UniformBuffer,
-				.count = k_FramesInFlight * 2
+				.count = k_FramesInFlight
 			},
 			{
 				.type = Velos::RHI::BindingType::StorageBuffer,
-				.count = k_FramesInFlight
+				.count = k_FramesInFlight * 4
 			}
 		};
 		lightsBindingPool_ = device_->CreateBindingPool({
@@ -2526,9 +2564,9 @@ namespace Iryven {
 			auto& frame = lightingFrames_[frameIndex];
 			frame.lightBuffer = CreateUploadBackedBuffer(
 				lightsBufferSize,
-				Velos::RHI::BufferUsage::Uniform,
+				Velos::RHI::BufferUsage::Storage,
 				"Frame Lights Buffer",
-				"Frame Lights Upload Buffer");
+				"Frame Lights Upload Buffer", true);
 			frame.frameDataBuffer = CreateUploadBackedBuffer(
 				sizeof(GpuFrameData),
 				Velos::RHI::BufferUsage::Uniform,
@@ -2552,7 +2590,7 @@ namespace Iryven {
 			device_->UpdateBindingSet({
 				.dstSet = frame.lightBindingSet,
 				.binding = 0,
-				.type = Velos::RHI::BindingType::UniformBuffer,
+				.type = Velos::RHI::BindingType::StorageBuffer,
 				.bufferInfo = &bufferInfo
 			});
 			const Velos::RHI::BindingBufferInfo frameDataBufferInfo{
