@@ -1,0 +1,65 @@
+#version 460
+#extension GL_EXT_mesh_shader : require
+#extension GL_GOOGLE_include_directive : require
+#extension GL_KHR_shader_subgroup_ballot : require
+
+#include "shadow_common.glsl"
+
+layout(local_size_x = 32) in;
+
+struct MeshletBounds {
+    vec4 sphere;
+};
+
+struct ShadowTaskPayload {
+    uint meshletIndices[32];
+    uint objectIndices[32];
+    uint lightAndFace;
+};
+taskPayloadSharedEXT ShadowTaskPayload payload;
+
+layout(push_constant) uniform ShadowDrawData {
+    uint commandIndex;
+    uint maxCandidatesPerLight;
+} drawData;
+layout(std430, set = 0, binding = 0) readonly buffer IndirectCommands {
+    ShadowDrawCommand commands[];
+};
+layout(std430, set = 0, binding = 1) readonly buffer VisibleMeshletInstances {
+    ShadowMeshletInstance visibleInstances[];
+};
+layout(std430, set = 0, binding = 2) readonly buffer Bounds {
+    MeshletBounds meshletBounds[];
+};
+layout(std430, set = 0, binding = 3) readonly buffer ObjectTransforms {
+    mat4 objectTransforms[];
+};
+layout(std430, set = 0, binding = 4) readonly buffer ShadowLightPositions {
+    vec4 lightPositions[];
+};
+
+void main() {
+    ShadowDrawCommand command = commands[drawData.commandIndex];
+    uint lightIndex = ShadowLightIndex(command.lightAndFace);
+    uint faceIndex = ShadowFaceIndex(command.lightAndFace);
+    uint candidateIndex = gl_WorkGroupID.x * 32u + gl_LocalInvocationIndex;
+    uint readOffset = lightIndex * drawData.maxCandidatesPerLight + candidateIndex;
+    ShadowMeshletInstance candidate = visibleInstances[readOffset];
+    vec4 localSphere = meshletBounds[candidate.meshletIndex].sphere;
+    mat4 model = objectTransforms[candidate.objectIndex];
+    vec3 center = (model * vec4(localSphere.xyz, 1.0)).xyz;
+    float scale = max(max(length(model[0].xyz), length(model[1].xyz)), length(model[2].xyz));
+    float radius = localSphere.w * scale;
+    uint faceMask = ShadowCubeFaceMask(lightPositions[lightIndex].xyz,
+        center - vec3(radius), center + vec3(radius));
+    bool visible = (faceMask & (1u << faceIndex)) != 0u;
+
+    uvec4 ballot = subgroupBallot(visible);
+    uint outputIndex = subgroupBallotExclusiveBitCount(ballot);
+    if (visible) {
+        payload.meshletIndices[outputIndex] = candidate.meshletIndex;
+        payload.objectIndices[outputIndex] = candidate.objectIndex;
+    }
+    if (gl_LocalInvocationIndex == 0u) payload.lightAndFace = command.lightAndFace;
+    EmitMeshTasksEXT(subgroupBallotBitCount(ballot), 1u, 1u);
+}

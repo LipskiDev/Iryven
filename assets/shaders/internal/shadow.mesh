@@ -1,0 +1,77 @@
+#version 460
+#extension GL_EXT_mesh_shader : require
+
+layout(local_size_x = 32) in;
+layout(triangles, max_vertices = 64, max_primitives = 128) out;
+
+struct Meshlet {
+    uint vertexOffset;
+    uint triangleOffset;
+    uint vertexCount;
+    uint triangleCount;
+    vec3 center;
+    float radius;
+    vec3 coneApex;
+    vec3 coneAxis;
+    float coneCutoff;
+};
+
+layout(std140, set = 0, binding = 0) uniform ShadowMatrices {
+    mat4 viewProjections[768];
+};
+layout(std430, set = 1, binding = 0) readonly buffer Vertices {
+    float vertexData[];
+};
+layout(std430, set = 1, binding = 1) readonly buffer Meshlets {
+    Meshlet meshlets[];
+};
+layout(std430, set = 1, binding = 2) readonly buffer MeshletVertexIndices {
+    uint meshletVertexIndices[];
+};
+layout(std430, set = 1, binding = 3) readonly buffer MeshletTriangleIndices {
+    uint meshletTriangleIndices[];
+};
+
+layout(push_constant) uniform ShadowDrawConstants {
+    mat4 model;
+    uvec4 meshletInfo;
+} draw;
+
+void main() {
+    uint meshletIndex = draw.meshletInfo.x + gl_WorkGroupID.x;
+	uint face = gl_WorkGroupID.y;
+	uint layer = draw.meshletInfo.y + face;
+    Meshlet meshlet = meshlets[meshletIndex];
+
+    mat4 mvp = viewProjections[layer] * draw.model;
+    vec3 worldCenter = (draw.model * vec4(meshlet.center, 1.0)).xyz;
+    float worldRadius = meshlet.radius * max(max(length(draw.model[0].xyz),
+        length(draw.model[1].xyz)), length(draw.model[2].xyz));
+    mat4 planeRows = transpose(viewProjections[layer]);
+    vec4 planes[6] = vec4[6](
+        planeRows[3] + planeRows[0], planeRows[3] - planeRows[0],
+        planeRows[3] + planeRows[1], planeRows[3] - planeRows[1],
+        planeRows[2], planeRows[3] - planeRows[2]);
+    for (uint planeIndex = 0u; planeIndex < 6u; ++planeIndex) {
+        vec4 plane = planes[planeIndex];
+        if (dot(plane, vec4(worldCenter, 1.0)) <
+            -worldRadius * length(plane.xyz)) {
+            SetMeshOutputsEXT(0u, 0u);
+            return;
+        }
+    }
+
+    SetMeshOutputsEXT(meshlet.vertexCount, meshlet.triangleCount);
+    for (uint i = gl_LocalInvocationIndex; i < meshlet.vertexCount; i += 32u) {
+        uint vertexIndex = meshletVertexIndices[meshlet.vertexOffset + i];
+        uint base = vertexIndex * 16u;
+        gl_MeshVerticesEXT[i].gl_Position = mvp * vec4(
+            vertexData[base], vertexData[base + 1u], vertexData[base + 2u], 1.0);
+    }
+    for (uint i = gl_LocalInvocationIndex; i < meshlet.triangleCount; i += 32u) {
+        uint base = meshlet.triangleOffset + i * 3u;
+        gl_PrimitiveTriangleIndicesEXT[i] = uvec3(meshletTriangleIndices[base],
+            meshletTriangleIndices[base + 1u], meshletTriangleIndices[base + 2u]);
+		gl_MeshPrimitivesEXT[i].gl_Layer = int(face);
+    }
+}

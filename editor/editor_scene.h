@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <array>
+#include <string>
 
 #include <iryven/iryven.h>
 
@@ -30,6 +31,13 @@ struct EditorRenderable {
     float occlusionStrength = 1.0f;
 };
 
+// Serializable recipe for a runtime MeshRenderer backed by a packaged model.
+// Runtime asset handles are process-local, so scenes persist the project path
+// and request a fresh handle when they are loaded.
+struct EditorModelAsset {
+    std::string path;
+};
+
 struct EditorPrimitiveChoice {
     const char* name;
     EditorPrimitiveMesh primitive;
@@ -39,7 +47,9 @@ struct EditorPrimitiveChoice {
 EditorSceneEntities CreateEditorStarterScene(Iryven::World& world);
 void LoadEditorScene(
     Iryven::World& world,
+    Iryven::AsynchronousLoader& loader,
     const std::filesystem::path& path,
     EditorSceneEntities& entities);
 const std::array<EditorPrimitiveChoice, 5>& EditorPrimitiveChoices();
 void ApplyEditorRenderable(Iryven::Entity entity);
+void ApplyEditorModelAsset(Iryven::Entity entity, Iryven::AsynchronousLoader& loader);

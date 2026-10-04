@@ -136,6 +136,15 @@ int RunSmokeTests()
     }
     {
         Iryven::World scene;
+        auto entity = scene.CreateEntity("EntityToDestroy");
+        entity.Destroy();
+        assert(!entity.IsAlive());
+        std::size_t entityCount = 0;
+        scene.ForEachEntity([&entityCount](Iryven::Entity) { ++entityCount; });
+        assert(entityCount == 0);
+    }
+    {
+        Iryven::World scene;
         auto empty = scene.CreateEntity("EmptyEntity");
         std::vector<std::uint64_t> sceneEntityIds;
         scene.ForEachEntity([&sceneEntityIds](Iryven::Entity entity) {
@@ -805,6 +814,20 @@ int RunSmokeTests()
     assert(gltfSampler.wrapU == Iryven::TextureWrap::ClampToEdge);
     assert(gltfSampler.wrapV == Iryven::TextureWrap::MirroredRepeat);
 
+    const auto binaryModelPath = std::filesystem::temp_directory_path() /
+        ("iryven-model-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".iryasset");
+    gltfAssets.ImportModel("tests/assets/basic_triangle.gltf", binaryModelPath);
+    Iryven::AssetManager binaryAssets;
+    const auto binaryModel = binaryAssets.LoadModel(binaryModelPath);
+    assert(binaryModel && binaryModel->IsValid());
+    assert(binaryModel->vertices.size() == gltfModel->vertices.size());
+    assert(binaryModel->indices == gltfModel->indices);
+    assert(binaryModel->materials.size() == gltfModel->materials.size());
+    assert(binaryModel->textureRegistry.textures.size() == gltfModel->textureRegistry.textures.size());
+    assert(binaryModel->textureRegistry.textures.front().texture->pixels ==
+        gltfModel->textureRegistry.textures.front().texture->pixels);
+    std::filesystem::remove(binaryModelPath);
+
     const auto extensionModel = gltfAssets.LoadModel("tests/assets/material_extensions.gltf");
     assert(extensionModel && extensionModel->IsValid());
     assert(extensionModel->materials.size() == 2);
@@ -1026,10 +1049,12 @@ int RunSmokeTests()
 int RunDeferredRendererTests();
 void RunDeferredShadingPixelTests(bool benchmark = false, const char* fragmentPath = nullptr);
 void RunLightTilingTests(bool benchmark = false, const char* shaderPath = nullptr);
+void RunSparseShadowAllocatorTests();
 
 int main(int argc, char** argv)
 {
     try {
+		RunSparseShadowAllocatorTests();
         if (argc > 1 && std::string(argv[1]) == "--lighting-benchmark") {
             RunLightTilingTests(true, argc > 3 ? argv[3] : nullptr);
             RunDeferredShadingPixelTests(true, argc > 2 ? argv[2] : nullptr);

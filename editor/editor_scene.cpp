@@ -7,7 +7,18 @@ namespace {
 
 void RegisterEditorSceneComponents(Iryven::World& world)
 {
-    world.GetFlecsWorld().component<EditorRenderable>()
+    auto& ecs = world.GetFlecsWorld();
+    ecs.component<std::string>().opaque(flecs::String)
+        .serialize([](const flecs::serializer* serializer, const std::string* value) {
+            const char* text = value->c_str();
+            return serializer->value(flecs::String, &text);
+        })
+        .assign_string([](std::string* value, const char* text) {
+            *value = text ? text : "";
+        });
+    ecs.component<EditorModelAsset>()
+        .member<std::string>("path", 0, offsetof(EditorModelAsset, path));
+    ecs.component<EditorRenderable>()
         .member<EditorPrimitiveMesh>("primitive", 0, offsetof(EditorRenderable, primitive))
         .member<Iryven::Color>("baseColor", 0, offsetof(EditorRenderable, baseColor))
         .member<float>("roughness", 0, offsetof(EditorRenderable, roughness))
@@ -19,6 +30,9 @@ void RegisterEditorSceneComponents(Iryven::World& world)
 
 void EnsureEditorRenderable(Iryven::Entity entity, const EditorRenderable& fallback)
 {
+    // A starter entity may have been changed from a primitive to a packaged
+    // model. Its serialized model recipe takes precedence over the fallback.
+    if (entity.Has<EditorModelAsset>()) return;
     if (!entity.Has<EditorRenderable>()) entity.Add<EditorRenderable>(fallback);
     ApplyEditorRenderable(entity);
 }
@@ -46,6 +60,7 @@ void ApplyEditorRenderable(Iryven::Entity entity)
         return candidate.primitive == settings.primitive;
     });
     if (choice == choices.end()) return;
+    if (entity.Has<EditorModelAsset>()) entity.Remove<EditorModelAsset>();
 
     auto material = std::make_shared<Iryven::Material>();
     material->baseColor = settings.baseColor;
@@ -66,6 +81,25 @@ void ApplyEditorRenderable(Iryven::Entity entity)
     renderer.material = std::move(material);
 }
 
+void ApplyEditorModelAsset(Iryven::Entity entity, Iryven::AsynchronousLoader& loader)
+{
+    if (!entity.Has<EditorModelAsset>()) return;
+    const auto path = std::filesystem::path{entity.Get<EditorModelAsset>().path};
+    if (path.empty()) return;
+
+    const auto handle = loader.RequestModel(path);
+    if (entity.Has<EditorRenderable>()) entity.Remove<EditorRenderable>();
+    if (!entity.Has<Iryven::MeshRenderer>()) {
+        entity.Add<Iryven::MeshRenderer>(handle);
+        return;
+    }
+    auto& renderer = entity.Get<Iryven::MeshRenderer>();
+    renderer.mesh.reset();
+    renderer.model.reset();
+    renderer.modelAsset = handle;
+    renderer.material.reset();
+}
+
 EditorSceneEntities CreateEditorStarterScene(Iryven::World& world)
 {
     RegisterEditorSceneComponents(world);
@@ -81,6 +115,7 @@ EditorSceneEntities CreateEditorStarterScene(Iryven::World& world)
 
 void LoadEditorScene(
     Iryven::World& world,
+    Iryven::AsynchronousLoader& loader,
     const std::filesystem::path& path,
     EditorSceneEntities& entities)
 {
@@ -98,5 +133,8 @@ void LoadEditorScene(
         .baseColor = Iryven::Color{0.35f, 0.38f, 0.42f}, .roughness = 1.0f });
     world.ForEachEntity([](Iryven::Entity entity) {
         if (entity.Has<EditorRenderable>()) ApplyEditorRenderable(entity);
+    });
+    world.ForEachEntity([&loader](Iryven::Entity entity) {
+        if (entity.Has<EditorModelAsset>()) ApplyEditorModelAsset(entity, loader);
     });
 }

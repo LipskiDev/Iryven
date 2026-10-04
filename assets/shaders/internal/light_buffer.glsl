@@ -8,6 +8,8 @@ struct GpuLight {
     vec4 directionAndRange;
     vec4 colorAndIntensity;
     vec4 spotAngles;
+    // x=enabled, y=sparse image mip, z=cubemap slot, w=reserved.
+    uvec4 shadowInfo;
 };
 
 layout(std430, set = 0, binding = 0) readonly buffer LightBuffer {

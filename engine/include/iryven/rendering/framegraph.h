@@ -109,7 +109,10 @@ struct FrameGraphTextureInfo {
     std::uint32_t width = 0;
     std::uint32_t height = 0;
     std::uint32_t depth = 1;
+    std::uint32_t arrayLayers = 1;
     Velos::RHI::Format format{};
+    Velos::RHI::ImageType imageType = Velos::RHI::ImageType::Image2D;
+    Velos::RHI::ImageViewType viewType = Velos::RHI::ImageViewType::View2D;
     Velos::RHI::ImageUsage usage{};
     RenderPassOperation loadOp = RenderPassOperation::DontCare;
     Velos::RHI::ClearColor clearColor{};

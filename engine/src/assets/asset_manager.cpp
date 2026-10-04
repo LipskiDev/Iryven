@@ -1,6 +1,7 @@
 #include <iryven/asset_manager.h>
 
 #include "model_importers.h"
+#include "iry_asset.h"
 
 #include <charconv>
 #include <fstream>
@@ -117,13 +118,29 @@ namespace Iryven {
 		else if (extension == ".glb" || extension == ".gltf") {
 			model = Importers::ImportGltf(key);
 		}
+		else if (extension == ".iryasset") {
+			model = IryAsset::ReadModel(key);
+		}
 		else {
-			throw std::runtime_error("Unsupported model format '" + extension.string() + "' (expected .obj, .gltf, or .glb)");
+			throw std::runtime_error("Unsupported model format '" + extension.string() + "' (expected .iryasset, .obj, .gltf, or .glb)");
 		}
 
 		std::scoped_lock lock(mutex_);
 		const auto [iterator, inserted] = models_.try_emplace(key, model);
 		return iterator->second;
+	}
+
+	void AssetManager::ImportModel(
+		const std::filesystem::path& source,
+		const std::filesystem::path& destination) {
+		const auto sourcePath = NormalizePath(source);
+		if (sourcePath.extension() == ".iryasset")
+			throw std::invalid_argument("Cannot import an .iryasset as a source model");
+		if (destination.extension() != ".iryasset")
+			throw std::invalid_argument("Imported model destination must use .iryasset");
+		const auto model = LoadModel(sourcePath);
+		std::filesystem::create_directories(destination.parent_path());
+		IryAsset::WriteModel(destination, *model);
 	}
 
 	MaterialHandle AssetManager::LoadMaterial(const std::filesystem::path& path) {

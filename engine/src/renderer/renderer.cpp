@@ -24,10 +24,12 @@
 
 #include "passes/gbuffer.h"
 #include "passes/light_culling.h"
+#include "passes/shadow_mapping.h"
 #include "passes/shading.h"
 #include "passes/hi_z.h"
 #include "passes/cloth_compute.h"
 #include "passes/forward.h"
+#include "passes/tonemapping.h"
 
 namespace {
 
@@ -98,9 +100,9 @@ namespace Iryven {
 		// x=emissive, y=texture-presence flags.
 		glm::uvec4 textureIndices1{0u};
 		glm::vec4 specularGlossiness{1.0f};
-		// x=transmission; remaining lanes reserved.
+		// x=transmission, y=alpha cutoff.
 		glm::vec4 transmission{0.0f};
-		// x=specular-glossiness texture, y=transmission texture, z=workflow (1=SG).
+		// x=specular-glossiness texture, y=transmission texture, z=workflow (1=SG), w=alpha mode.
 		glm::uvec4 extensionTextures{0u};
 	};
 	static_assert(sizeof(GpuMaterial) == 128);
@@ -152,15 +154,19 @@ namespace Iryven {
 		frameGraph_.Init(frameGraphBuilder_);
 		gbufferPass_ = std::make_unique<GBufferPass>(*this);
 		lightCullingPass_ = std::make_unique<LightCullingPass>(*this);
+		shadowMappingPass_ = std::make_unique<ShadowMappingPass>(*this);
 		clothCompute_ = std::make_unique<ClothCompute>(*this);
 		forwardPass_ = std::make_unique<ForwardPass>(*this);
 		shadingPass_ = std::make_unique<ShadingPass>(*this);
+		tonemappingPass_ = std::make_unique<TonemappingPass>(*this);
 		frameGraphBuilder_.RegisterRenderPass("gbuffer", *gbufferPass_);
 		frameGraphBuilder_.RegisterRenderPass("lightCulling", *lightCullingPass_);
+		frameGraphBuilder_.RegisterRenderPass("shadowMapping", *shadowMappingPass_);
 		frameGraphBuilder_.RegisterRenderPass("shading", *shadingPass_);
 		frameGraphBuilder_.RegisterRenderPass("clothCompute", *clothCompute_);
 		frameGraphBuilder_.RegisterRenderPass("forward", *forwardPass_);
 		frameGraphBuilder_.RegisterRenderPass("hiZ", *hiZPass_);
+		frameGraphBuilder_.RegisterRenderPass("tonemapping", *tonemappingPass_);
 
         // Cloth must signal before tiling so its graphics consumer can start early.
 		if (clothComputePipeline_) {
@@ -185,8 +191,25 @@ namespace Iryven {
                 {.type = FrameGraphResourceType::Buffer,
                 .access = FrameGraphAccess::TransferWrite,
                 .info = lightCullingPass_->DepthBinBufferInfo(),
-                .external = true, .name = "lightDepthBins"}},
+                .external = true, .name = "lightDepthBins"},
+                {.type = FrameGraphResourceType::Reference,
+                .name = "lightPreparationComplete"}},
             .queue = QueueType::Compute});
+
+		// The pass owns one sparse cube-array. It performs per-mip layered
+		// rendering while the frame graph tracks the image as a single resource.
+		frameGraph_.AddNode({.name = "shadowMapping",
+			.inputs = {
+				{.type = FrameGraphResourceType::Reference,
+					.name = "lightPreparationComplete"},
+				{.type = FrameGraphResourceType::Buffer,
+					.access = FrameGraphAccess::ShaderStorageRead,
+					.name = "lightTiles"},
+			},
+			.outputs = {{.type = FrameGraphResourceType::Texture,
+				.access = FrameGraphAccess::DepthStencilWrite,
+				.info = shadowMappingPass_->ShadowMapInfo(),
+				.external = true, .name = "pointShadowMap"}}});
 
         std::vector<FrameGraphResourceOutputCreation> gbufferOutputs;
         for (std::size_t i = 0; i < GBufferNames.size(); ++i) {
@@ -223,16 +246,21 @@ namespace Iryven {
             .access = FrameGraphAccess::ShaderSampledRead, .name = name});
         shadingInputs.push_back({.type = FrameGraphResourceType::Texture,
             .access = FrameGraphAccess::ShaderSampledRead, .name = "depth"});
+		shadingInputs.push_back({.type = FrameGraphResourceType::Texture,
+			.access = FrameGraphAccess::ShaderSampledRead,
+			.name = "pointShadowMap"});
         const Color clearColor = Color::CornflowerBlue;
         frameGraph_.AddNode({.name = "shading", .inputs = std::move(shadingInputs),
             .outputs = {{.type = FrameGraphResourceType::Attachment,
                 .info = FrameGraphTextureInfo{
                     .width = static_cast<std::uint32_t>(width),
                     .height = static_cast<std::uint32_t>(height),
-                    .format = Format::BGRA8_UNORM, .usage = ImageUsage::ColorAttachment,
-                    .loadOp = RenderPassOperation::Clear,
-                    .clearColor = {clearColor.R(), clearColor.G(), clearColor.B(), clearColor.A()}},
-                .external = true, .name = "backbuffer"}}});
+                    .format = Format::RGBA16_FLOAT,
+					.usage = ImageUsage::ColorAttachment | ImageUsage::Sampled,
+					.loadOp = RenderPassOperation::Clear,
+					.clearColor = {clearColor.R(), clearColor.G(), clearColor.B(), clearColor.A()},
+					.resizeWithSwapchain = true},
+				.name = "sceneColor"}}});
 
 		std::vector<FrameGraphResourceInputCreation> forwardInputs;
 		forwardInputs.push_back({.type = FrameGraphResourceType::Buffer,
@@ -245,7 +273,7 @@ namespace Iryven {
 			.info = FrameGraphTextureInfo{
 				.loadOp = RenderPassOperation::Load,
 			},
-			.name = "backbuffer",
+			.name = "sceneColor",
 		});
 		forwardInputs.push_back({
 			.type = FrameGraphResourceType::Attachment,
@@ -258,7 +286,29 @@ namespace Iryven {
 		frameGraph_.AddNode({
 			.name = "forward",
 			.inputs = std::move(forwardInputs),
-			.outputs = {{.type = FrameGraphResourceType::Reference, .name = "opaqueDepthComplete"}},
+			.outputs = {{.type = FrameGraphResourceType::Reference, .name = "opaqueDepthComplete"},
+				{.type = FrameGraphResourceType::Reference, .name = "forwardComplete"}},
+		});
+		frameGraph_.AddNode({
+			.name = "tonemapping",
+			.inputs = {
+				{.type = FrameGraphResourceType::Reference, .name = "forwardComplete"},
+				{.type = FrameGraphResourceType::Texture,
+					.access = FrameGraphAccess::ShaderSampledRead,
+					.name = "sceneColor"},
+			},
+			.outputs = {{
+				.type = FrameGraphResourceType::Attachment,
+				.info = FrameGraphTextureInfo{
+					.width = static_cast<std::uint32_t>(width),
+					.height = static_cast<std::uint32_t>(height),
+					.format = Format::BGRA8_UNORM,
+					.usage = ImageUsage::ColorAttachment,
+					.loadOp = RenderPassOperation::Clear,
+				},
+				.external = true,
+				.name = "backbuffer",
+			}},
 		});
 		frameGraph_.AddNode({
 			.name = "hiZ",
@@ -287,9 +337,11 @@ namespace Iryven {
 		frameGraph_.Shutdown();
 		frameGraphBuilder_.Shutdown();
 		forwardPass_.reset();
+		tonemappingPass_.reset();
 		clothCompute_.reset();
 		gbufferPass_.reset();
 		lightCullingPass_.reset();
+		shadowMappingPass_.reset();
 		shadingPass_.reset();
 		for (auto& [id, cloth] : cloths_) DestroyGpuCloth(cloth);
 		cloths_.clear();
@@ -1020,12 +1072,13 @@ namespace Iryven {
 			glm::vec4 directionAndRange;
 			glm::vec4 colorAndIntensity;
 			glm::vec4 spotAngles;
+			glm::uvec4 shadowInfo;
 		};
 		struct alignas(16) GpuLights {
 			glm::uvec4 metadata{ 0u };
 			std::array<GpuLight, k_MaxLightSources> lights{};
 		};
-		static_assert(sizeof(GpuLight) == 64);
+		static_assert(sizeof(GpuLight) == 80);
 
 		GpuLights gpuLights;
 		const std::size_t lightCount = std::min<std::size_t>(lights.size(), k_MaxLightSources);
@@ -1042,8 +1095,15 @@ namespace Iryven {
 				.colorAndIntensity = glm::vec4(glm::vec3(source.color.Vector()), source.intensity),
 				.spotAngles = glm::vec4(
 					glm::cos(glm::radians(source.innerConeAngle)),
-					glm::cos(glm::radians(source.outerConeAngle)), 0.0f, 0.0f)
+					glm::cos(glm::radians(source.outerConeAngle)), 0.0f, 0.0f),
+				.shadowInfo = glm::uvec4(0u),
 			};
+		}
+		for (const auto& assignment : pointShadowAssignments_) {
+			if (assignment.packedLightIndex >= lightCount) continue;
+			gpuLights.lights[assignment.packedLightIndex].shadowInfo = glm::uvec4(
+				1u, assignment.mipLevel,
+				assignment.slot, 0u);
 		}
 
 		UploadBuffer(
@@ -1149,11 +1209,12 @@ namespace Iryven {
 					resolveTextureIndex(material->emissiveTexture),
 					textureFlags, 0u, 0u),
 				.specularGlossiness = glm::vec4(glm::vec3(material->specular.Vector()), material->glossiness),
-				.transmission = glm::vec4(material->transmission, 0.0f, 0.0f, 0.0f),
+				.transmission = glm::vec4(material->transmission, material->alphaCutoff, 0.0f, 0.0f),
 				.extensionTextures = glm::uvec4(
 					resolveTextureIndex(material->specularGlossinessTexture),
 					resolveTextureIndex(material->transmissionTexture),
-					material->specularGlossiness ? 1u : 0u, 0u),
+					material->specularGlossiness ? 1u : 0u,
+					static_cast<std::uint32_t>(material->alphaMode)),
 			});
 		};
 
@@ -1351,7 +1412,7 @@ namespace Iryven {
 			},
 			.topology = Velos::RHI::PrimitiveTopology::TriangleList,
 			.raster = {
-				.cullBackFaces = true,
+				.cullBackFaces = false,
 				.frontFaceCCW = true,
 				.wireframe = false,
 			},
@@ -1375,12 +1436,13 @@ namespace Iryven {
         gltfDesc.fragmentShader = gbufferFragmentShader_;
         gltfDesc.colorAttachments = GBufferAttachments();
         gltfPipeline_ = device_->CreateGraphicsPipeline(gltfDesc);
-        gltfDesc.fragmentShader = gltfFragmentShader_;
-        gltfDesc.colorAttachments.clear();
+		gltfDesc.fragmentShader = gltfFragmentShader_;
+		gltfDesc.colorAttachments.clear();
+		gltfDesc.colorFormat = Velos::RHI::Format::RGBA16_FLOAT;
 		// Thin transmission: C = C_background * transmittance + C_surface.
 		// Disable depth writes so the background remains visible.
 		gltfDesc.depth.depthWriteEnable = false;
-		gltfDesc.raster.cullBackFaces = true;
+		gltfDesc.raster.cullBackFaces = false;
 		gltfDesc.blend = {
 			.enable = true,
 			.srcColor = Velos::RHI::BlendFactor::Zero,
@@ -1586,7 +1648,7 @@ namespace Iryven {
 				.depthFormat = Velos::RHI::Format::D32_FLOAT
 			},
 			.blend = {.enable = true},
-			.colorFormat = Velos::RHI::Format::BGRA8_UNORM,
+			.colorFormat = Velos::RHI::Format::RGBA16_FLOAT,
 			.debugName = "Iryven text pipeline",
 		});
 
@@ -1677,12 +1739,13 @@ namespace Iryven {
         meshletDesc.fragmentShader = gbufferMeshletFragmentShader_;
         meshletDesc.colorAttachments = GBufferAttachments();
         meshletPipeline_ = device_->CreateMeshPipeline(meshletDesc);
-        meshletDesc.fragmentShader = meshletFragmentShader_;
-        meshletDesc.colorAttachments.clear();
+		meshletDesc.fragmentShader = meshletFragmentShader_;
+		meshletDesc.colorAttachments.clear();
+		meshletDesc.colorFormat = Velos::RHI::Format::RGBA16_FLOAT;
 		// Thin transmission: C = C_background * transmittance + C_surface.
 		// Disable depth writes so the background remains visible.
 		meshletDesc.depth.depthWriteEnable = false;
-		meshletDesc.raster.cullBackFaces = true;
+		meshletDesc.raster.cullBackFaces = false;
 		meshletDesc.blend = {
 			.enable = true,
 			.srcColor = Velos::RHI::BlendFactor::Zero,
@@ -2541,7 +2604,7 @@ namespace Iryven {
 			.debugName = "Iryven font binding pool"
 		});
 
-		constexpr std::uint64_t gpuLightSize = sizeof(glm::vec4) * 4;
+		constexpr std::uint64_t gpuLightSize = sizeof(glm::vec4) * 5;
 		constexpr std::uint64_t lightsBufferSize = sizeof(glm::uvec4) + gpuLightSize * k_MaxLightSources;
 		const Velos::RHI::BindingPoolSize poolSizes[]{
 			{

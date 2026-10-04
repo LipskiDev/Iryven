@@ -6,6 +6,7 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <unordered_set>
 
 EditorLayer::EditorLayer(Iryven::Engine& engine) : Layer("Editor"), engine_(engine) {}
@@ -14,12 +15,12 @@ void EditorLayer::OnAttach()
 {
     ImGui::GetIO().IniFilename = nullptr;
     ImGui::StyleColorsDark();
-    ImGui::GetStyle().FontSizeBase = 18.0f;
+    ImGui::GetStyle().FontSizeBase = 16.0f;
     auto& style = ImGui::GetStyle();
-    style.WindowPadding = {18, 16};
-    style.FramePadding = {10, 7};
-    style.ItemSpacing = {10, 10};
-    style.ItemInnerSpacing = {7, 6};
+    style.WindowPadding = {10, 9};
+    style.FramePadding = {7, 4};
+    style.ItemSpacing = {7, 6};
+    style.ItemInnerSpacing = {5, 4};
     style.WindowRounding = 0;
     style.FrameRounding = 5;
     style.GrabRounding = 4;
@@ -49,12 +50,15 @@ void EditorLayer::OnAttach()
     auto scene = CreateEditorStarterScene(world);
     camera_ = scene.camera;
     selected_ = scene.cube;
+    RefreshAssets();
 
     if (std::filesystem::exists(scenePath_)) {
-        LoadEditorScene(world, scenePath_, scene);
+        LoadEditorScene(world, engine_.GetAsyncLoader(), scenePath_, scene);
         camera_ = scene.camera;
         selected_ = scene.cube;
-        inspectorAngles_ = glm::degrees(glm::eulerAngles(selected_.Get<Iryven::Transform>().rotation));
+        inspectorAngles_ = selected_.IsAlive() && selected_.Has<Iryven::Transform>()
+            ? glm::degrees(glm::eulerAngles(selected_.Get<Iryven::Transform>().rotation))
+            : glm::vec3(0.0f);
         sceneStatus_ = "Loaded scenes/editor.json";
     }
 }
@@ -74,6 +78,9 @@ void EditorLayer::OnImGuiRender()
     DrawPanels();
     Navigate();
     if (!playing_ && ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) SaveScene();
+    if (!playing_ && !ImGui::GetIO().WantTextInput && !ImGui::IsAnyItemActive() &&
+        ImGui::IsKeyPressed(ImGuiKey_Delete, false))
+        deleteSelectedRequested_ = true;
 }
 
 bool EditorLayer::SaveScene()
@@ -137,7 +144,7 @@ void EditorLayer::CreateEntityFromPreset(PendingEntityPreset preset)
         break;
     case PendingEntityPreset::PointLight:
         selected_.Add<Iryven::Transform>();
-        selected_.Add<Iryven::Light>(Iryven::Light{ .type = Iryven::LightType::Point, .intensity = 10.0f });
+        selected_.Add<Iryven::Light>(Iryven::Light{ .type = Iryven::LightType::Point, .intensity = 10.0f, .range = 3.0f });
         break;
     case PendingEntityPreset::UIText:
         selected_.Add<Iryven::UIText>();
@@ -156,6 +163,94 @@ void EditorLayer::CreateEntityFromPreset(PendingEntityPreset preset)
     saveFailed_ = false;
 }
 
+void EditorLayer::DeleteSelectedEntity()
+{
+    if (!selected_.IsAlive() || (camera_.IsAlive() && selected_.GetId() == camera_.GetId())) return;
+
+    const std::string name = selected_.GetName() ? selected_.GetName() : "Unnamed";
+    selected_.Destroy();
+    selected_ = {};
+    inspectorAngles_ = glm::vec3(0.0f);
+    sceneStatus_ = "Deleted " + name;
+    saveFailed_ = false;
+}
+
+void EditorLayer::DuplicateSelectedEntity()
+{
+    if (!selected_.IsAlive() || (camera_.IsAlive() && selected_.GetId() == camera_.GetId())) return;
+
+    Iryven::Entity source = selected_;
+    auto& world = engine_.GetWorld();
+    const std::string sourceName = source.GetName() ? source.GetName() : "Entity";
+    const std::string copyBase = sourceName + " Copy";
+    std::string copyName = copyBase;
+    for (int suffix = 2; world.GetFlecsWorld().lookup(copyName.c_str()).id() != 0; ++suffix)
+        copyName = copyBase + " " + std::to_string(suffix);
+
+    Iryven::Entity duplicate = world.CreateEntity(copyName);
+    const auto copyComponent = [&]<typename T>() {
+        if (source.Has<T>()) duplicate.Add<T>(source.Get<T>());
+    };
+    copyComponent.template operator()<Iryven::Transform>();
+    copyComponent.template operator()<Iryven::Camera>();
+    copyComponent.template operator()<Iryven::Light>();
+    copyComponent.template operator()<Iryven::RigidBody>();
+    copyComponent.template operator()<Iryven::Collider>();
+    copyComponent.template operator()<Iryven::UIText>();
+
+    if (source.Has<EditorRenderable>()) {
+        duplicate.Add<EditorRenderable>(source.Get<EditorRenderable>());
+        ApplyEditorRenderable(duplicate);
+    } else if (source.Has<EditorModelAsset>()) {
+        duplicate.Add<EditorModelAsset>(source.Get<EditorModelAsset>());
+        ApplyEditorModelAsset(duplicate, engine_.GetAsyncLoader());
+    } else if (source.Has<Iryven::MeshRenderer>()) {
+        duplicate.Add<Iryven::MeshRenderer>(source.Get<Iryven::MeshRenderer>());
+    }
+
+    selected_ = duplicate;
+    inspectorAngles_ = duplicate.Has<Iryven::Transform>()
+        ? glm::degrees(glm::eulerAngles(duplicate.Get<Iryven::Transform>().rotation))
+        : glm::vec3(0.0f);
+    sceneStatus_ = "Duplicated " + sourceName;
+    saveFailed_ = false;
+}
+
+void EditorLayer::RenameSelectedEntity()
+{
+    if (!selected_.IsAlive() || renameBuffer_[0] == '\0') return;
+    const auto existing = engine_.GetWorld().GetFlecsWorld().lookup(renameBuffer_.data());
+    if (existing.id() != 0 && existing.id() != selected_.GetId()) {
+        sceneStatus_ = "An entity named '" + std::string(renameBuffer_.data()) + "' already exists";
+        saveFailed_ = true;
+        return;
+    }
+    selected_.SetName(renameBuffer_.data());
+    sceneStatus_ = "Renamed entity to " + std::string(renameBuffer_.data());
+    saveFailed_ = false;
+}
+
+void EditorLayer::RemoveSelectedComponent(PendingComponent component)
+{
+    if (!selected_.IsAlive()) return;
+    switch (component) {
+    case PendingComponent::Transform: selected_.Remove<Iryven::Transform>(); break;
+    case PendingComponent::Camera: selected_.Remove<Iryven::Camera>(); break;
+    case PendingComponent::Light: selected_.Remove<Iryven::Light>(); break;
+    case PendingComponent::RigidBody: selected_.Remove<Iryven::RigidBody>(); break;
+    case PendingComponent::Collider: selected_.Remove<Iryven::Collider>(); break;
+    case PendingComponent::MeshRenderer:
+        selected_.Remove<Iryven::MeshRenderer>();
+        if (selected_.Has<EditorRenderable>()) selected_.Remove<EditorRenderable>();
+        if (selected_.Has<EditorModelAsset>()) selected_.Remove<EditorModelAsset>();
+        break;
+    case PendingComponent::UIText: selected_.Remove<Iryven::UIText>(); break;
+    case PendingComponent::None: return;
+    }
+    sceneStatus_ = "Removed component";
+    saveFailed_ = false;
+}
+
 void EditorLayer::ApplyPendingActions()
 {
     if (playToggleRequested_) {
@@ -166,7 +261,26 @@ void EditorLayer::ApplyPendingActions()
     if (playing_) {
         pendingEntityPreset_ = PendingEntityPreset::None;
         pendingComponent_ = PendingComponent::None;
+        duplicateSelectedRequested_ = false;
+        deleteSelectedRequested_ = false;
+        pendingComponentRemoval_ = PendingComponent::None;
         return;
+    }
+
+    if (duplicateSelectedRequested_) {
+        duplicateSelectedRequested_ = false;
+        DuplicateSelectedEntity();
+    }
+
+    if (deleteSelectedRequested_) {
+        deleteSelectedRequested_ = false;
+        DeleteSelectedEntity();
+    }
+
+    if (pendingComponentRemoval_ != PendingComponent::None) {
+        const auto component = pendingComponentRemoval_;
+        pendingComponentRemoval_ = PendingComponent::None;
+        RemoveSelectedComponent(component);
     }
 
     if (pendingEntityPreset_ != PendingEntityPreset::None) {
@@ -349,10 +463,32 @@ bool SliderField(const char* label, float& value, float min, float max, const ch
     return changed;
 }
 
-void DrawMeshRenderer(Iryven::Entity entity)
+bool ComponentHeader(const char* label, bool removable, bool& removeRequested)
+{
+    const bool open = ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen);
+    if (removable && ImGui::BeginPopupContextItem()) {
+        if (ImGui::MenuItem("Remove component")) removeRequested = true;
+        ImGui::EndPopup();
+    }
+    return open;
+}
+}
+
+void EditorLayer::DrawMeshRenderer(Iryven::Entity entity)
 {
     if (!entity.Has<EditorRenderable>()) {
-        ImGui::TextDisabled("Custom model assets are read-only in this inspector");
+        const std::string preview = entity.Has<EditorModelAsset>()
+            ? std::filesystem::path{entity.Get<EditorModelAsset>().path}.filename().string()
+            : "External model";
+        if (ImGui::BeginCombo("Mesh", preview.c_str())) {
+            for (const auto& path : projectAssets_) {
+                const bool packaged = path.extension() == ".iryasset";
+                ImGui::BeginDisabled(!packaged);
+                if (ImGui::Selectable(path.filename().string().c_str()) && packaged) AssignModelAsset(path);
+                ImGui::EndDisabled();
+            }
+            ImGui::EndCombo();
+        }
         return;
     }
 
@@ -370,6 +506,7 @@ void DrawMeshRenderer(Iryven::Entity entity)
     const char* preview = selectedPrimitive >= 0 ? choices[selectedPrimitive].name : "Custom mesh";
     ImGui::TextUnformatted("Mesh");
     ImGui::SetNextItemWidth(-1);
+    std::filesystem::path selectedAsset;
     if (ImGui::BeginCombo("##mesh", preview)) {
         for (int index = 0; index < static_cast<int>(choices.size()); ++index) {
             const bool selected = selectedPrimitive == index;
@@ -379,7 +516,20 @@ void DrawMeshRenderer(Iryven::Entity entity)
             }
             if (selected) ImGui::SetItemDefaultFocus();
         }
+        if (!projectAssets_.empty()) ImGui::SeparatorText("Project assets");
+        for (const auto& path : projectAssets_) {
+            const bool packaged = path.extension() == ".iryasset";
+            ImGui::BeginDisabled(!packaged);
+            if (ImGui::Selectable(path.filename().string().c_str()) && packaged) selectedAsset = path;
+            ImGui::EndDisabled();
+            if (!packaged && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("Import this source model from the Assets tab first");
+        }
         ImGui::EndCombo();
+    }
+    if (!selectedAsset.empty()) {
+        AssignModelAsset(selectedAsset);
+        return;
     }
 
     ImGui::Spacing();
@@ -394,21 +544,96 @@ void DrawMeshRenderer(Iryven::Entity entity)
     changed |= SliderField("Occlusion strength", settings.occlusionStrength, 0.0f, 1.0f, "%.2f");
     if (changed) ApplyEditorRenderable(entity);
 }
+
+void EditorLayer::RefreshAssets()
+{
+    projectAssets_.clear();
+    std::error_code error;
+    if (!std::filesystem::exists("assets", error)) return;
+    for (std::filesystem::recursive_directory_iterator iterator("assets", error), end;
+         iterator != end && !error; iterator.increment(error)) {
+        if (!iterator->is_regular_file(error)) continue;
+        const auto extension = iterator->path().extension().string();
+        if (extension == ".iryasset" || extension == ".obj" || extension == ".gltf" || extension == ".glb")
+            projectAssets_.push_back(iterator->path().lexically_normal());
+    }
+    std::ranges::sort(projectAssets_);
+}
+
+void EditorLayer::AssignModelAsset(const std::filesystem::path& path)
+{
+    if (!selected_.IsAlive() || path.extension() != ".iryasset") return;
+    const std::string serializedPath = path.lexically_normal().generic_string();
+    if (selected_.Has<EditorModelAsset>()) selected_.Get<EditorModelAsset>().path = serializedPath;
+    else selected_.Add<EditorModelAsset>(EditorModelAsset{serializedPath});
+    ApplyEditorModelAsset(selected_, engine_.GetAsyncLoader());
+    sceneStatus_ = "Loading " + path.generic_string();
+    saveFailed_ = false;
+}
+
+void EditorLayer::ImportModelAsset(const std::filesystem::path& path)
+{
+    if (path.extension() == ".iryasset") return;
+    auto destination = path;
+    destination.replace_extension(".iryasset");
+    try {
+        engine_.GetAssets().ImportModel(path, destination);
+        sceneStatus_ = "Imported " + destination.generic_string();
+        saveFailed_ = false;
+        RefreshAssets();
+    } catch (const std::exception& error) {
+        sceneStatus_ = error.what();
+        saveFailed_ = true;
+    }
+}
+
+void EditorLayer::DrawAssetBrowser()
+{
+    if (ImGui::Button("Refresh", {-1, 0})) RefreshAssets();
+    ImGui::Separator();
+    if (projectAssets_.empty()) {
+        ImGui::TextDisabled("No model assets found");
+        ImGui::TextWrapped("Place .obj, .gltf, .glb, or future .iryasset files under assets/.");
+        return;
+    }
+    std::filesystem::path assetToAssign;
+    std::filesystem::path sourceToImport;
+    for (const auto& path : projectAssets_) {
+        const bool packaged = path.extension() == ".iryasset";
+        ImGui::PushID(path.generic_string().c_str());
+        ImGui::TextDisabled("%s", packaged ? "ASSET" : "SOURCE");
+        ImGui::SameLine();
+        const bool enabled = !playing_ && (packaged ? selected_.IsAlive() : true);
+        ImGui::BeginDisabled(!enabled);
+        if (ImGui::Selectable(path.filename().string().c_str(), false, ImGuiSelectableFlags_AllowDoubleClick) &&
+            ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+            if (packaged) assetToAssign = path;
+            else sourceToImport = path;
+        }
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered()) {
+            if (packaged) ImGui::SetTooltip("Double-click to assign to the selected entity");
+            else ImGui::SetTooltip("Double-click to import as a self-contained .iryasset");
+        }
+        ImGui::PopID();
+    }
+    if (!sourceToImport.empty()) ImportModelAsset(sourceToImport);
+    else if (!assetToAssign.empty()) AssignModelAsset(assetToAssign);
 }
 
 void EditorLayer::DrawPanels()
 {
     const auto size = ImGui::GetIO().DisplaySize;
-    const float left = std::min(270.0f, size.x * 0.24f);
-    const float right = std::min(360.0f, size.x * 0.32f);
-    const float top = 62.0f;
-    const float bottom = 36.0f;
+    const float left = std::min(235.0f, size.x * 0.20f);
+    const float right = std::min(325.0f, size.x * 0.28f);
+    const float top = 46.0f;
+    const float bottom = 28.0f;
     const auto flags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
         ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoSavedSettings;
     ImGui::SetNextWindowPos({0, 0});
     ImGui::SetNextWindowSize({size.x, top});
     ImGui::Begin("##toolbar", nullptr, flags | ImGuiWindowFlags_NoScrollbar);
-    ImGui::TextColored({0.48f, 0.85f, 0.77f, 1}, "I R Y V E N");
+    ImGui::TextColored({0.48f, 0.85f, 0.77f, 1}, "IRYVEN");
     ImGui::SameLine();
     ImGui::TextDisabled("  /  SCENE EDITOR");
     if (size.x > 900) {
@@ -417,20 +642,24 @@ void EditorLayer::DrawPanels()
         ImGui::SameLine();
         ImGui::TextDisabled("  Perspective");
     }
-    ImGui::SameLine(size.x - 116.0f);
+    ImGui::SameLine(size.x - 92.0f);
     if (playing_) ImGui::PushStyleColor(ImGuiCol_Button, {0.52f, 0.16f, 0.18f, 1.0f});
-    if (ImGui::Button(playing_ ? "Stop" : "Play", {92, 34})) playToggleRequested_ = true;
+    if (ImGui::Button(playing_ ? "Stop" : "Play", {74, 27})) playToggleRequested_ = true;
     if (playing_) ImGui::PopStyleColor();
     ImGui::End();
 
     ImGui::SetNextWindowPos({0, top});
     ImGui::SetNextWindowSize({left, std::max(1.0f, size.y - top - bottom)});
     ImGui::Begin("##hierarchy", nullptr, flags);
-    SectionLabel("HIERARCHY");
-    ImGui::TextDisabled("Scene objects");
-    ImGui::Spacing();
+    if (ImGui::Selectable("Scene", !showAssets_, 0, {70, 24})) showAssets_ = false;
+    ImGui::SameLine();
+    if (ImGui::Selectable("Assets", showAssets_, 0, {70, 24})) showAssets_ = true;
+    ImGui::Separator();
+    if (showAssets_) {
+        DrawAssetBrowser();
+    } else {
     ImGui::BeginDisabled(playing_);
-    if (ImGui::Button("+  Create entity", {-1, 34})) ImGui::OpenPopup("create_entity");
+    if (ImGui::Button("+  Create", {-1, 27})) ImGui::OpenPopup("create_entity");
     DrawCreateEntityMenu();
     ImGui::EndDisabled();
     ImGui::Spacing();
@@ -441,16 +670,49 @@ void EditorLayer::DrawPanels()
         ImGui::TextDisabled("%s", type);
         ImGui::SameLine();
         if (ImGui::Selectable(entity.GetName() ? entity.GetName() : "Unnamed",
-            selected_.IsAlive() && selected_.GetId() == entity.GetId(), 0, {0, 28})) {
+            selected_.IsAlive() && selected_.GetId() == entity.GetId(), 0, {0, 23})) {
             selected_ = entity;
             inspectorAngles_ = entity.Has<Iryven::Transform>()
                 ? glm::degrees(glm::eulerAngles(entity.Get<Iryven::Transform>().rotation))
                 : glm::vec3(0.0f);
         }
+        if (ImGui::BeginPopupContextItem("entity_context")) {
+            selected_ = entity;
+            if (ImGui::MenuItem("Rename", "F2", false, !playing_)) {
+                renameBuffer_.fill('\0');
+                if (const char* name = entity.GetName()) {
+                    const auto length = std::min(std::strlen(name), renameBuffer_.size() - 1);
+                    std::copy_n(name, length, renameBuffer_.data());
+                }
+                renamePopupRequested_ = true;
+            }
+            const bool isEditorCamera = camera_.IsAlive() && entity.GetId() == camera_.GetId();
+            if (ImGui::MenuItem("Duplicate", nullptr, false, !playing_ && !isEditorCamera))
+                duplicateSelectedRequested_ = true;
+            if (ImGui::MenuItem("Delete", "Del", false, !playing_ && !isEditorCamera))
+                deleteSelectedRequested_ = true;
+            ImGui::EndPopup();
+        }
         ImGui::PopID();
     });
-    SectionLabel("NAVIGATION");
-    ImGui::TextWrapped("Right mouse   Look around\nW A S D         Move\nQ / E              Down / Up\nShift               Boost\nF                     Focus selection");
+    if (renamePopupRequested_) {
+        ImGui::OpenPopup("Rename entity");
+        renamePopupRequested_ = false;
+    }
+    ImGui::SetNextWindowSize({300, 0}, ImGuiCond_Appearing);
+    if (ImGui::BeginPopupModal("Rename entity", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::SetKeyboardFocusHere();
+        const bool submitted = ImGui::InputText("Name", renameBuffer_.data(), renameBuffer_.size(),
+            ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+        if (submitted || ImGui::Button("Rename")) {
+            RenameSelectedEntity();
+            if (!saveFailed_) ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    }
     ImGui::End();
 
     ImGui::SetNextWindowPos({size.x - right, top});
@@ -462,10 +724,12 @@ void EditorLayer::DrawPanels()
         ImGui::TextDisabled(playing_ ? "Runtime entity (read-only)" : "Selected entity");
         ImGui::Spacing();
         ImGui::BeginDisabled(playing_);
-        if (ImGui::Button("+  Add component", {-1, 34})) ImGui::OpenPopup("add_component");
+        if (ImGui::Button("+  Add component", {-1, 27})) ImGui::OpenPopup("add_component");
         DrawAddComponentMenu();
         ImGui::Spacing();
-        if (selected_.Has<Iryven::Transform>() && ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
+        bool removeComponent = false;
+        const bool isEditorCamera = camera_.IsAlive() && selected_.GetId() == camera_.GetId();
+        if (selected_.Has<Iryven::Transform>() && ComponentHeader("Transform", !isEditorCamera, removeComponent)) {
             auto& transform = selected_.Get<Iryven::Transform>();
             VectorField("Position", transform.position, 0.05f);
             if (selected_.GetId() == camera_.GetId() && navigating_)
@@ -478,19 +742,26 @@ void EditorLayer::DrawPanels()
             if (ImGui::Button("Focus selected", {-1, 34})) FocusSelection();
             ImGui::EndDisabled();
         }
-        if (selected_.Has<Iryven::Light>() && ImGui::CollapsingHeader("Light", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (removeComponent) pendingComponentRemoval_ = PendingComponent::Transform;
+        removeComponent = false;
+        if (selected_.Has<Iryven::Light>() && ComponentHeader("Light", true, removeComponent)) {
             auto& light = selected_.Get<Iryven::Light>();
             ImGui::Checkbox("Enabled", &light.enabled);
             ImGui::SetNextItemWidth(-1);
             ImGui::ColorEdit3("##lightColor", glm::value_ptr(light.color.value));
             SliderField("Intensity", light.intensity, 0, 100, "%.2f");
+            SliderField("Range", light.range, 0, 100, "%.2f");
         }
-        if (selected_.Has<Iryven::Camera>() && ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (removeComponent) pendingComponentRemoval_ = PendingComponent::Light;
+        removeComponent = false;
+        if (selected_.Has<Iryven::Camera>() && ComponentHeader("Camera", !isEditorCamera, removeComponent)) {
             auto& camera = selected_.Get<Iryven::Camera>();
             ImGui::Checkbox("Primary", &camera.primary);
             SliderField("Field of view", camera.verticalFov, 25, 100, "%.0f deg");
         }
-        if (selected_.Has<Iryven::RigidBody>() && ImGui::CollapsingHeader("Rigid Body", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (removeComponent) pendingComponentRemoval_ = PendingComponent::Camera;
+        removeComponent = false;
+        if (selected_.Has<Iryven::RigidBody>() && ComponentHeader("Rigid Body", true, removeComponent)) {
             auto& body = selected_.Get<Iryven::RigidBody>();
             const char* bodyTypes[] = {"Static", "Kinematic", "Dynamic"};
             int bodyType = static_cast<int>(body.type);
@@ -500,7 +771,9 @@ void EditorLayer::DrawPanels()
             SliderField("Gravity scale", body.gravityScale, 0, 5, "%.2f");
             ImGui::Checkbox("Fixed rotation", &body.fixedRotation);
         }
-        if (selected_.Has<Iryven::Collider>() && ImGui::CollapsingHeader("Collider", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (removeComponent) pendingComponentRemoval_ = PendingComponent::RigidBody;
+        removeComponent = false;
+        if (selected_.Has<Iryven::Collider>() && ComponentHeader("Collider", true, removeComponent)) {
             auto& collider = selected_.Get<Iryven::Collider>();
             const char* colliderTypes[] = {"Box", "Sphere", "Capsule"};
             int colliderType = static_cast<int>(collider.type);
@@ -516,14 +789,19 @@ void EditorLayer::DrawPanels()
             }
             ImGui::Checkbox("Sensor", &collider.sensor);
         }
-        if (selected_.Has<Iryven::MeshRenderer>() && ImGui::CollapsingHeader("Mesh Renderer", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (removeComponent) pendingComponentRemoval_ = PendingComponent::Collider;
+        removeComponent = false;
+        if (selected_.Has<Iryven::MeshRenderer>() && ComponentHeader("Mesh Renderer", true, removeComponent)) {
             DrawMeshRenderer(selected_);
         }
-        if (selected_.Has<Iryven::UIText>() && ImGui::CollapsingHeader("UI Text", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (removeComponent) pendingComponentRemoval_ = PendingComponent::MeshRenderer;
+        removeComponent = false;
+        if (selected_.Has<Iryven::UIText>() && ComponentHeader("UI Text", true, removeComponent)) {
             auto& text = selected_.Get<Iryven::UIText>();
             SliderField("Font size", text.fontSize, 6, 144, "%.0f px");
             ImGui::TextDisabled("Assign a font and text from code");
         }
+        if (removeComponent) pendingComponentRemoval_ = PendingComponent::UIText;
         ImGui::EndDisabled();
     } else {
         ImGui::TextWrapped("Select an entity in the hierarchy to inspect its properties.");
@@ -539,6 +817,25 @@ void EditorLayer::DrawPanels()
         SliderField("Field of view", camera_.Get<Iryven::Camera>().verticalFov, 25, 100, "%.0f deg");
         ImGui::TextDisabled("Lower response = softer motion");
     }
+	if (ImGui::CollapsingHeader("Lighting debug")) {
+		if (ImGui::Checkbox("Light count", &lightCountView_)) {
+			if (lightCountView_) shadowTierView_ = false;
+			engine_.SetLightCountView(lightCountView_);
+			engine_.SetShadowTierView(shadowTierView_);
+		}
+		if (ImGui::Checkbox("Shadow resolution", &shadowTierView_)) {
+			if (shadowTierView_) lightCountView_ = false;
+			engine_.SetLightCountView(lightCountView_);
+			engine_.SetShadowTierView(shadowTierView_);
+		}
+		if (shadowTierView_) {
+			ImGui::TextColored({1.0f, 0.2f, 0.15f, 1.0f}, "High / 1024");
+			ImGui::TextColored({1.0f, 0.8f, 0.1f, 1.0f}, "Medium / 512");
+			ImGui::TextColored({0.15f, 0.45f, 1.0f, 1.0f}, "Low / 256");
+			ImGui::TextColored({0.65f, 0.25f, 1.0f, 1.0f}, "Very low / 128");
+			ImGui::TextDisabled("Black = no shadowed point light");
+		}
+	}
     ImGui::End();
 
     ImGui::SetNextWindowPos({0, size.y - bottom});

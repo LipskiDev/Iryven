@@ -1,4 +1,5 @@
 #include "shading.h"
+#include "shadow_mapping.h"
 #include <shader/shader_compiler.h>
 
 namespace Iryven {
@@ -16,7 +17,7 @@ Renderer::ShadingPass::ShadingPass(Renderer& renderer) : renderer_(renderer)
         };
         vertex_ = createShader("assets/shaders/internal/shading.vert.spv", ShaderStage::Vertex);
         fragment_ = createShader("assets/shaders/internal/shading.frag.spv", ShaderStage::Fragment);
-        std::array<BindingDesc, 5> bindings{};
+        std::array<BindingDesc, 6> bindings{};
         for (std::uint32_t i = 0; i < bindings.size(); ++i)
             bindings[i] = {.binding = i, .type = BindingType::CombinedImageSampler,
                 .visibility = ShaderStage::Fragment};
@@ -25,9 +26,10 @@ Renderer::ShadingPass::ShadingPass(Renderer& renderer) : renderer_(renderer)
         const BindingLayoutHandle layouts[]{renderer_.lightsBindingLayout_, textureLayout_};
         pipeline_ = device.CreateGraphicsPipeline({.vertexShader = vertex_, .fragmentShader = fragment_,
             .layout = {.descriptorSetLayouts = layouts, .descriptorSetLayoutCount = 2},
-            .raster = {.cullBackFaces = false}, .colorFormat = Format::BGRA8_UNORM,
+            .raster = {.cullBackFaces = false}, .colorFormat = Format::RGBA16_FLOAT,
             .debugName = "Screen-space deferred shading"});
-        const BindingPoolSize size{.type = BindingType::CombinedImageSampler, .count = 5 * k_FramesInFlight};
+        const BindingPoolSize size{.type = BindingType::CombinedImageSampler,
+            .count = static_cast<std::uint32_t>(bindings.size()) * k_FramesInFlight};
         pool_ = device.CreateBindingPool({.poolSizes = &size, .poolSizeCount = 1,
             .maxSets = k_FramesInFlight, .debugName = "Shading inputs"});
         sampler_ = device.CreateSampler({.minFilter = Filter::Nearest, .magFilter = Filter::Nearest});
@@ -60,6 +62,15 @@ void Renderer::ShadingPass::PreRender(ICommandList&, const RenderScene&)
         renderer_.device_->UpdateBindingSet({.dstSet = set, .binding = i,
             .type = BindingType::CombinedImageSampler, .imageInfo = &image});
     }
+	const BindingImageInfo shadowImage{
+			.sampler = renderer_.shadowMappingPass_->ShadowSampler(),
+			.imageView = renderer_.shadowMappingPass_->ShadowSamplingView(),
+			.imageLayout = ImageLayout::ShaderReadOnly,
+		};
+		renderer_.device_->UpdateBindingSet({
+			.dstSet = set, .binding = 5,
+			.type = BindingType::CombinedImageSampler, .imageInfo = &shadowImage,
+		});
 }
 
 void Renderer::ShadingPass::Render(ICommandList& commands, const RenderScene& scene)
@@ -69,9 +80,18 @@ void Renderer::ShadingPass::Render(ICommandList& commands, const RenderScene& sc
     commands.BindPipeline(pipeline_);
     commands.SetBindings(pipeline_, 0, renderer_.lightingFrames_.at(renderer_.frame_.frameIndex).lightBindingSet);
     commands.SetBindings(pipeline_, 1, sets_.at(renderer_.frame_.frameIndex));
-    struct Constants { glm::mat4 inverseViewProjection; std::uint32_t lightCountView; };
-    const Constants constants{inverseViewProjection, renderer_.lightCountView_ ? 1u : 0u};
-    commands.PushConstants(ShaderStage::Fragment, 0, 68, &constants);
+    struct alignas(16) Constants {
+        glm::mat4 inverseViewProjection;
+        std::uint32_t lightCountView = 0;
+		std::uint32_t shadowTierView = 0;
+    };
+	static_assert(sizeof(Constants) == 80);
+    Constants constants{
+        .inverseViewProjection = inverseViewProjection,
+        .lightCountView = renderer_.lightCountView_ ? 1u : 0u,
+		.shadowTierView = renderer_.shadowTierView_ ? 1u : 0u,
+    };
+    commands.PushConstants(ShaderStage::Fragment, 0, 72, &constants);
     commands.Draw(3);
 }
 }

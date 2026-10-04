@@ -1,15 +1,14 @@
-#ifndef IRYVEN_LIGHT_SUBGROUPS
-#define IRYVEN_LIGHT_SUBGROUPS 0
-#endif
-#if IRYVEN_LIGHT_SUBGROUPS
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
 #extension GL_KHR_shader_subgroup_ballot : require
-#endif
 
 #include "light_buffer.glsl"
 #include "light_tiles.glsl"
 #include "light_depth_bins.glsl"
+
+#ifndef IRYVEN_POINT_SHADOW
+#define IRYVEN_POINT_SHADOW(light, worldPosition, normal) 1.0
+#endif
 
 const float PI = 3.14159265359;
 
@@ -41,12 +40,14 @@ vec3 EvaluateDirectLighting(
     vec3 reflectanceAtNormal,
     bool specularGlossiness,
     float transmission,
-    bool countLights) {
+	bool countLights,
+	bool showShadowTiers) {
     float diffuseWeight = specularGlossiness
         ? 1.0 - max(max(reflectanceAtNormal.r, reflectanceAtNormal.g), reflectanceAtNormal.b)
         : 1.0 - metallic;
-    vec3 lighting = baseColor * diffuseWeight * (1.0 - transmission) *
-        0.05 * ambientOcclusion;
+    vec3 lighting = showShadowTiers ? vec3(0.0) :
+		baseColor * diffuseWeight * (1.0 - transmission) *
+		0.05 * ambientOcclusion;
 
     // Material and view terms are constant across all lights for this fragment.
     float normalDotView = max(dot(normal, viewDirection), 0.0001);
@@ -64,15 +65,10 @@ vec3 EvaluateDirectLighting(
     uint word = localRange.x / 32u;
     uint endWord = localRange.x < localRange.y ? (localRange.y + 31u) / 32u : word;
     uint affectingLights = 0u;
+	float dominantLightImpact = -1.0;
+	uint dominantShadowTier = 4u;
     uint bits = 0u, laneMask = 0u, wordBase = 0u, directional = 0u;
     for (;;) {
-
-        if (countLights) {
-            if (any(greaterThan(light.colorAndIntensity.rgb * light.colorAndIntensity.w, vec3(0.0))))
-                ++affectingLights;
-            continue;
-        }
-
         uint index;
         bool selected = true;
         if (directional < lightHeader.y) {
@@ -98,6 +94,11 @@ vec3 EvaluateDirectLighting(
         }
         GpuLight light = lights[index];
         if (!selected) continue;
+        if (countLights) {
+            if (any(greaterThan(light.colorAndIntensity.rgb * light.colorAndIntensity.w, vec3(0.0))))
+                ++affectingLights;
+            continue;
+        }
         uint type = uint(light.positionAndType.w);
         vec3 toLight;
         float attenuation = 1.0;
@@ -144,7 +145,20 @@ vec3 EvaluateDirectLighting(
             diffuseBase;
         vec3 radiance = light.colorAndIntensity.rgb *
             light.colorAndIntensity.w * attenuation;
-        lighting += (diffuse + specular) * radiance * normalDotLight;
+        float visibility = type == 1u
+            ? IRYVEN_POINT_SHADOW(light, worldPosition, normal)
+            : 1.0;
+		vec3 contribution = (diffuse + specular) * radiance *
+			normalDotLight * visibility;
+		if (showShadowTiers) {
+			float impact = dot(contribution, vec3(0.2126, 0.7152, 0.0722));
+			if (impact > dominantLightImpact) {
+				dominantLightImpact = impact;
+				dominantShadowTier = type == 1u && light.shadowInfo.x != 0u
+					? light.shadowInfo.y : 3u;
+			}
+		}
+		lighting += contribution;
     }
     // Debug view: color code the number of lights affecting this fragment.
     if (countLights) {
@@ -157,5 +171,12 @@ vec3 EvaluateDirectLighting(
         if (affectingLights <= 64u) return vec3(1.0, 0.0, 0.0);
         return vec3(1.0, 0.0, 1.0);
     }
+	if (showShadowTiers) {
+		if (dominantShadowTier == 0u) return vec3(1.0, 0.2, 0.15);
+		if (dominantShadowTier == 1u) return vec3(1.0, 0.8, 0.1);
+		if (dominantShadowTier == 2u) return vec3(0.15, 0.45, 1.0);
+		if (dominantShadowTier == 3u) return vec3(0.65, 0.25, 1.0);
+		return vec3(0.0);
+	}
     return lighting;
 }

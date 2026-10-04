@@ -18,6 +18,7 @@ layout(push_constant) uniform DrawConstants {
 } draw;
 
 #include "gltf_material.glsl"
+// Material alpha semantics are evaluated by the shared shader.
 
 void main() {
     ShadeMaterial(draw.materialIndex, draw.phase);

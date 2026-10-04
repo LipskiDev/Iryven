@@ -260,3 +260,4 @@ std::unique_ptr<Layer> Engine::PopOverlay(Layer& overlay)
 } // namespace Iryven
 
 void Iryven::Engine::SetLightCountView(bool enabled) { renderer_->SetLightCountView(enabled); }
+void Iryven::Engine::SetShadowTierView(bool enabled) { renderer_->SetShadowTierView(enabled); }

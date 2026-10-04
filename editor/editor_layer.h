@@ -5,6 +5,8 @@
 #include <iryven/iryven.h>
 
 #include <cstdint>
+#include <array>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -54,9 +56,18 @@ private:
     void FocusSelection();
     bool SaveScene();
     void CreateEntityFromPreset(PendingEntityPreset preset);
+    void DuplicateSelectedEntity();
+    void DeleteSelectedEntity();
+    void RenameSelectedEntity();
+    void RemoveSelectedComponent(PendingComponent component);
     void ApplyPendingActions();
     void DrawAddComponentMenu();
     void DrawCreateEntityMenu();
+    void DrawMeshRenderer(Iryven::Entity entity);
+    void DrawAssetBrowser();
+    void RefreshAssets();
+    void ImportModelAsset(const std::filesystem::path& path);
+    void AssignModelAsset(const std::filesystem::path& path);
     void TogglePlayMode();
     void EnterPlayMode();
     void ExitPlayMode();
@@ -78,6 +89,12 @@ private:
     float moveResponse_ = 12.0f;
     float lookResponse_ = 16.0f;
     bool navigating_ = false;
+    bool duplicateSelectedRequested_ = false;
+    bool deleteSelectedRequested_ = false;
+    bool renamePopupRequested_ = false;
+    bool showAssets_ = false;
+	bool lightCountView_ = false;
+	bool shadowTierView_ = false;
     bool playToggleRequested_ = false;
     bool playing_ = false;
     std::vector<EntitySnapshot> playSnapshot_;
@@ -85,4 +102,7 @@ private:
     std::string playCameraEntity_;
     PendingEntityPreset pendingEntityPreset_ = PendingEntityPreset::None;
     PendingComponent pendingComponent_ = PendingComponent::None;
+    PendingComponent pendingComponentRemoval_ = PendingComponent::None;
+    std::array<char, 128> renameBuffer_{};
+    std::vector<std::filesystem::path> projectAssets_;
 };

@@ -1,0 +1,28 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "shadow_common.glsl"
+
+layout(local_size_x = 32) in;
+
+layout(push_constant) uniform ShadowCommandData {
+    uint lightCount;
+} commandData;
+layout(std430, set = 0, binding = 0) readonly buffer PerLightCounts {
+    uint perLightCounts[];
+};
+layout(std430, set = 0, binding = 1) writeonly buffer IndirectCommands {
+    ShadowDrawCommand commands[];
+};
+
+void main() {
+    uint lightIndex = gl_GlobalInvocationID.x;
+    if (lightIndex >= commandData.lightCount) return;
+    uint groupCount = (perLightCounts[lightIndex] + SHADOW_TASK_GROUP_SIZE - 1u) /
+        SHADOW_TASK_GROUP_SIZE;
+    for (uint face = 0u; face < SHADOW_CUBE_FACE_COUNT; ++face) {
+        uint index = lightIndex * SHADOW_CUBE_FACE_COUNT + face;
+        commands[index] = ShadowDrawCommand(groupCount, 1u, 1u,
+            PackShadowLightFace(lightIndex, face));
+    }
+}

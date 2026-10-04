@@ -2,6 +2,7 @@
 /bin-int/
 /build/
 /cache/
+/dist/
 /assets/shaders/internal/*.spv
 /assets/models/Bistro_Godot.glb
 /.vs/

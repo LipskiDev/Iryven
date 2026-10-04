@@ -9,6 +9,12 @@
 
 namespace Iryven {
 
+enum class MaterialAlphaMode : std::uint32_t {
+    Opaque,
+    Mask,
+    Blend,
+};
+
 struct Material {
     std::string name;
     std::filesystem::path source;
@@ -18,6 +24,9 @@ struct Material {
     Color emissive = Color::Black;
     float normalScale = 1.0f;
     float occlusionStrength = 1.0f;
+    MaterialAlphaMode alphaMode = MaterialAlphaMode::Opaque;
+    float alphaCutoff = 0.5f;
+    bool doubleSided = false;
     std::uint32_t baseColorTexture = InvalidTextureIndex;
     std::uint32_t baseColorTexCoord = 0;
     std::uint32_t metallicRoughnessTexture = InvalidTextureIndex;

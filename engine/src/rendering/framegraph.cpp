@@ -242,6 +242,23 @@ void ValidateOutput(const FrameGraphResourceOutputCreation& creation)
         !std::holds_alternative<FrameGraphTextureInfo>(creation.info)) {
         throw std::invalid_argument("Frame-graph texture output requires texture info");
     }
+
+    if (const auto* texture = std::get_if<FrameGraphTextureInfo>(&creation.info)) {
+        if (texture->arrayLayers == 0) {
+            throw std::invalid_argument(
+                "Frame-graph texture arrayLayers must be greater than zero");
+        }
+        if (texture->imageType == Velos::RHI::ImageType::Cube &&
+            (texture->arrayLayers < 6 || texture->arrayLayers % 6 != 0)) {
+            throw std::invalid_argument(
+                "Frame-graph cube textures require a positive multiple of six array layers");
+        }
+        if (texture->viewType == Velos::RHI::ImageViewType::View2D &&
+            texture->arrayLayers != 1) {
+            throw std::invalid_argument(
+                "Layered frame-graph textures require a layered image view");
+        }
+    }
 }
 
 [[nodiscard]] bool IsConcurrent(const FrameGraphResourceInfo& info)
@@ -334,7 +351,9 @@ void FrameGraphBuilder::AllocateResource(FrameGraphResource& resource)
             .width = texture->width,
             .height = texture->height,
             .depth = texture->depth,
+            .arrayLayers = texture->arrayLayers,
             .format = texture->format,
+            .type = texture->imageType,
             .usage = texture->usage,
             .concurrentQueues = texture->concurrentQueues,
             .debugName = resource.name.c_str(),
@@ -348,7 +367,9 @@ void FrameGraphBuilder::AllocateResource(FrameGraphResource& resource)
         texture->view = Device().CreateImageView({
             .image = texture->handle,
             .format = texture->format,
+            .type = texture->viewType,
             .aspect = ImageAspectFor(texture->format),
+            .arrayLayerCount = texture->arrayLayers,
             .debugName = resource.name.c_str(),
         });
         if (!texture->view.IsValid()) {
@@ -1022,6 +1043,7 @@ void FrameGraph::RecordBatch(
         bool hasDepthAttachment = false;
         std::uint32_t renderWidth = 0;
         std::uint32_t renderHeight = 0;
+        std::uint32_t renderLayerCount = 0;
 
         std::vector<Velos::RHI::BufferBarrier> bufferBarriers;
         std::vector<Velos::RHI::ImageBarrier> imageBarriers;
@@ -1117,6 +1139,7 @@ void FrameGraph::RecordBatch(
                     .newState = desiredState,
                     .useExplicitStates = true,
                     .aspect = ImageAspectFor(texture->format),
+                    .layerCount = texture->arrayLayers,
                     .sourceQueue = sameQueue ? tracked.queue : node->queue,
                     .destinationQueue = node->queue,
                 });
@@ -1144,6 +1167,12 @@ void FrameGraph::RecordBatch(
             }
             renderWidth = texture->width;
             renderHeight = texture->height;
+            if (renderLayerCount != 0 &&
+                renderLayerCount != texture->arrayLayers) {
+                throw std::logic_error("Pass '" + node->name +
+                    "' uses attachments with different layer counts");
+            }
+            renderLayerCount = texture->arrayLayers;
 
             if (IsDepthFormat(texture->format)) {
                 if (hasDepthAttachment) {
@@ -1212,6 +1241,7 @@ void FrameGraph::RecordBatch(
                 .colorAttachments = colorAttachments.data(),
                 .colorAttachmentCount = static_cast<std::uint32_t>(colorAttachments.size()),
                 .depthAttachment = hasDepthAttachment ? &depthAttachment : nullptr,
+                .layerCount = renderLayerCount,
             });
         }
 		cpuTimings_.renderingSetupMs += ElapsedMilliseconds(renderingSetupStart);

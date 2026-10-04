@@ -8,6 +8,38 @@
 #include <stdexcept>
 #include <vector>
 #include "../engine/src/renderer/light_depth_bins.h"
+#include "../engine/src/renderer/sparse_shadow_allocator.h"
+
+void RunSparseShadowAllocatorTests()
+{
+    Iryven::SparseShadowAllocator allocator;
+    allocator.Configure(128, 128, 18); // Exactly three 128x128 cubemaps.
+    const std::array requests{
+        Iryven::SparseShadowAllocator::LightRequest{.lightIndex = 0, .shadowSlot = 2,
+            .requestedResolution = 1024},
+        Iryven::SparseShadowAllocator::LightRequest{.lightIndex = 1, .shadowSlot = 0,
+            .requestedResolution = 1024},
+        Iryven::SparseShadowAllocator::LightRequest{.lightIndex = 2, .shadowSlot = 1,
+            .requestedResolution = 1024},
+    };
+    const auto allocations = allocator.BuildPlan(requests);
+    if (allocations.size() != requests.size())
+        throw std::runtime_error("Sparse shadows dropped a light that fit at minimum resolution");
+    for (std::size_t index = 0; index < allocations.size(); ++index) {
+        if (allocations[index].shadowSlot != index ||
+			allocations[index].resolution != 128u ||
+			allocations[index].firstPage != index * 6u ||
+			allocations[index].pageCount != 6u)
+            throw std::runtime_error("Sparse shadow degradation or stable-slot allocation mismatch");
+    }
+
+    allocator.Configure(128, 128, 12); // Only the two highest priorities fit.
+    const auto constrained = allocator.BuildPlan(requests);
+    if (constrained.size() != 2 || constrained[0].lightIndex != 1 ||
+        constrained[1].lightIndex != 0)
+        throw std::runtime_error("Sparse shadow budget did not preserve priority");
+    std::cout << "Sparse shadow allocator: graceful degradation and stable slots passed\n";
+}
 
 static void TestDepthBins()
 {
@@ -70,10 +102,10 @@ void RunLightTilingTests(bool benchmark, const char* shaderPath)
     auto layout = device->BuildPipelineLayout(Velos::ShaderCompiler::MergeShaderReflection(reflections));
     auto pipeline = device->CreateComputePipeline({.computeShader = shader,
         .layout = {.descriptorSetLayouts = layout.setLayouts.data(), .descriptorSetLayoutCount = 1}});
-    const BindingPoolSize sizes[]{{BindingType::UniformBuffer, 1}, {BindingType::StorageBuffer, 2}};
+    const BindingPoolSize sizes[]{{BindingType::UniformBuffer, 1}, {BindingType::StorageBuffer, 3}};
     auto pool = device->CreateBindingPool({.poolSizes = sizes, .poolSizeCount = 2, .maxSets = 1});
     auto set = device->AllocateBindingSet({.pool = pool, .layout = layout.setLayouts[0]});
-    struct Light { glm::vec4 position, direction, color, spot; };
+    struct Light { glm::vec4 position, direction, color, spot; glm::uvec4 shadow; };
     struct Lights { glm::uvec4 header{}; std::array<Light, 512> lights{}; } lights;
     struct alignas(16) Data { glm::mat4 view{1}, projection{1}; glm::uvec4 viewport{}; } data;
     static_assert(sizeof(Data) == 144);
@@ -84,15 +116,23 @@ void RunLightTilingTests(bool benchmark, const char* shaderPath)
     constexpr std::size_t outputSize = (4 + 6 * 16) * sizeof(std::uint32_t);
     auto output = device->CreateBuffer({.size = outputSize,
         .usage = BufferUsage::Storage | BufferUsage::TransferSrc});
+	std::array<std::uint32_t, 512> shadowResolutions{};
+	auto resolutionBuffer = device->CreateBuffer({.size = sizeof(shadowResolutions),
+		.usage = BufferUsage::Storage, .memoryUsage = MemoryUsage::CPUToGPU,
+		.initialData = shadowResolutions.data()});
     auto readback = device->CreateBuffer({.size = outputSize, .usage = BufferUsage::TransferDst,
         .memoryUsage = MemoryUsage::GPUToCPU});
     const BindingBufferInfo lightInfo{.buffer = lightBuffer, .range = sizeof(lights)};
     const BindingBufferInfo dataInfo{.buffer = dataBuffer, .range = sizeof(data)};
     const BindingBufferInfo outputInfo{.buffer = output, .range = outputSize};
+	const BindingBufferInfo resolutionInfo{.buffer = resolutionBuffer,
+		.range = sizeof(shadowResolutions)};
     device->UpdateBindingSet({.dstSet = set, .binding = 0,
         .type = BindingType::StorageBuffer, .bufferInfo = &lightInfo});
     device->UpdateBindingSet({.dstSet = set, .binding = 1,
         .type = BindingType::UniformBuffer, .bufferInfo = &dataInfo});
+	device->UpdateBindingSet({.dstSet = set, .binding = 2,
+		.type = BindingType::StorageBuffer, .bufferInfo = &resolutionInfo});
     device->UpdateBindingSet({.dstSet = set, .binding = 3,
         .type = BindingType::StorageBuffer, .bufferInfo = &outputInfo});
 
@@ -209,7 +249,8 @@ void RunLightTilingTests(bool benchmark, const char* shaderPath)
         device->DestroyBuffer(largeOutput);
     }
     device->DestroyPipeline(pipeline); device->DestroyBindingPool(pool);
-    for (auto buffer : {lightBuffer, dataBuffer, output, readback}) device->DestroyBuffer(buffer);
+	for (auto buffer : {lightBuffer, dataBuffer, output, readback, resolutionBuffer})
+		device->DestroyBuffer(buffer);
     for (auto setLayout : layout.ownedSetLayouts) device->DestroyBindingLayout(setLayout);
     device->DestroyShader(shader);
     device.reset(); glfwTerminate();

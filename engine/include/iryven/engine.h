@@ -85,6 +85,7 @@ public:
 
     void Run();
     void SetLightCountView(bool enabled);
+	void SetShadowTierView(bool enabled);
 
 private:
     void OnEvent(Event& event);

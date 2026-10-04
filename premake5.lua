@@ -97,20 +97,22 @@ project "Iryven"
         buildcommands { '"' .. glslc .. '" -O --target-env=vulkan1.3 -fshader-stage=vert -o "%{file.abspath}.spv" "%{file.abspath}"' }
         buildoutputs { "%{file.abspath}.spv" }
     filter "files:assets/shaders/internal/**.frag"
-        buildinputs { "assets/shaders/internal/gltf_material.glsl", "assets/shaders/internal/lighting.glsl", "assets/shaders/internal/frame_uniform.glsl", "assets/shaders/internal/light_buffer.glsl", "assets/shaders/internal/light_tiles.glsl", "assets/shaders/internal/light_depth_bins.glsl" }
+        buildinputs { "assets/shaders/internal/gltf_material.glsl", "assets/shaders/internal/lighting.glsl", "assets/shaders/internal/frame_uniform.glsl", "assets/shaders/internal/light_buffer.glsl", "assets/shaders/internal/light_tiles.glsl", "assets/shaders/internal/light_depth_bins.glsl", "assets/shaders/internal/shadow_common.glsl", "assets/shaders/internal/shadow_sampling.glsl" }
         buildmessage "Compiling %{file.name} to SPIR-V"
         buildcommands { '"' .. glslc .. '" -O --target-env=vulkan1.3 -fshader-stage=frag -o "%{file.abspath}.spv" "%{file.abspath}"' }
         buildoutputs { "%{file.abspath}.spv" }
     filter "files:assets/shaders/internal/**.comp"
-        buildinputs { "assets/shaders/internal/light_buffer.glsl", "assets/shaders/internal/light_tiles.glsl", "assets/shaders/internal/light_depth_bins.glsl" }
+        buildinputs { "assets/shaders/internal/light_buffer.glsl", "assets/shaders/internal/light_tiles.glsl", "assets/shaders/internal/light_depth_bins.glsl", "assets/shaders/internal/shadow_common.glsl" }
         buildmessage "Compiling %{file.name} to SPIR-V"
         buildcommands { '"' .. glslc .. '" -O --target-env=vulkan1.3 -fshader-stage=comp -o "%{file.abspath}.spv" "%{file.abspath}"' }
         buildoutputs { "%{file.abspath}.spv" }
     filter "files:assets/shaders/internal/**.mesh"
+        buildinputs { "assets/shaders/internal/shadow_common.glsl" }
         buildmessage "Compiling %{file.name} to SPIR-V"
         buildcommands { '"' .. glslc .. '" -O --target-env=vulkan1.3 -fshader-stage=mesh -o "%{file.abspath}.spv" "%{file.abspath}"' }
         buildoutputs { "%{file.abspath}.spv" }
     filter "files:assets/shaders/internal/**.task"
+        buildinputs { "assets/shaders/internal/shadow_common.glsl" }
         buildmessage "Compiling %{file.name} to SPIR-V"
         buildcommands { '"' .. glslc .. '" -O --target-env=vulkan1.3 -fshader-stage=task -o "%{file.abspath}.spv" "%{file.abspath}"' }
         buildoutputs { "%{file.abspath}.spv" }

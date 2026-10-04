@@ -233,8 +233,16 @@ namespace Iryven::Importers {
 				material->occlusionTexCoord = requireU32(
 					source.occlusionTexture->texCoordIndex, "occlusion texture index"
 				);
-				material->occlusionStrength = source.occlusionTexture->strength;
+			material->occlusionStrength = source.occlusionTexture->strength;
 			}
+
+			switch (source.alphaMode) {
+			case fastgltf::AlphaMode::Mask: material->alphaMode = MaterialAlphaMode::Mask; break;
+			case fastgltf::AlphaMode::Blend: material->alphaMode = MaterialAlphaMode::Blend; break;
+			case fastgltf::AlphaMode::Opaque: material->alphaMode = MaterialAlphaMode::Opaque; break;
+			}
+			material->alphaCutoff = source.alphaCutoff;
+			material->doubleSided = source.doubleSided;
 
 			if (source.emissiveTexture) {
 				material->emissiveTexture = registerTexture(

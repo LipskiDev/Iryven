@@ -42,7 +42,7 @@ float CleanRoughness(vec3 worldNormal, float perceptalRoughness) {
 }
 
 vec3 EvaluateMaterialNormal(GpuMaterial material) {
-    vec3 geometricNormal = normalize(worldNormal);
+    vec3 geometricNormal = normalize(worldNormal);  
     if ((material.textureIndices1.y & 4u) == 0u)
         return geometricNormal;
 
@@ -56,7 +56,7 @@ vec3 EvaluateMaterialNormal(GpuMaterial material) {
     } else {
         vec3 positionDx = dFdx(worldPosition);
         vec3 positionDy = dFdy(worldPosition);
-        vec2 uvDx = dFdx(texCoord);
+        vec2 uvDx = dFdx(texCoord); 
         vec2 uvDy = dFdy(texCoord);
         float determinant = uvDx.x * uvDy.y - uvDx.y * uvDy.x;
         if (abs(determinant) < 0.000001) return geometricNormal;
@@ -84,6 +84,8 @@ void ShadeMaterial(uint materialIndex, uint phase) {
         : vec4(1.0);
     vec4 baseColor = material.baseColorFactor *
         vertexColor * sampledBaseColor;
+    uint alphaMode = material.extensionTextures.w;
+    if (alphaMode == 1u && baseColor.a < material.transmission.y) discard;
     vec4 sampledMetallicRoughness = (flags & 2u) != 0u
         ? SampleBindlessTexture(material.textureIndices0.y)
         : vec4(1.0);
@@ -124,7 +126,7 @@ void ShadeMaterial(uint materialIndex, uint phase) {
     vec3 lighting = EvaluateDirectLighting(
         worldPosition, normal, viewDirection, baseColor.rgb,
         metallic, clamp(filteredRoughness, 0.045, 1.0), ambientOcclusion,
-        f0, specularGlossiness, transmission, false);
+        f0, specularGlossiness, transmission, false, false);
 
     // Thin-surface transmission uses two sorted draws: destination attenuation,
     // then additive surface lighting. Fresnel reflection is never faded by transmission.

@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <exception>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -37,8 +38,16 @@ namespace {
 		void OnImGuiRender() override
 		{
 			ImGui::Begin("Lighting debug");
-			if (ImGui::Checkbox("Lights affecting pixel (opaque)", &lightCountView_))
+			if (ImGui::Checkbox("Lights affecting pixel (opaque)", &lightCountView_)) {
+				if (lightCountView_) shadowTierView_ = false;
 				engine_.SetLightCountView(lightCountView_);
+				engine_.SetShadowTierView(shadowTierView_);
+			}
+			if (ImGui::Checkbox("Point shadow resolution", &shadowTierView_)) {
+				if (shadowTierView_) lightCountView_ = false;
+				engine_.SetLightCountView(lightCountView_);
+				engine_.SetShadowTierView(shadowTierView_);
+			}
 			if (lightCountView_) {
 				ImGui::TextUnformatted("Positive light energy, in range/cone, facing surface.");
 				const ImVec4 colors[]{{0,0,0,1},{0,0,1,1},{0,1,1,1},{0,1,0,1},{1,1,0,1},{1,0,0,1},{1,0,1,1}};
@@ -49,6 +58,28 @@ namespace {
 					ImGui::SameLine(); ImGui::TextUnformatted(labels[i]); ImGui::PopID();
 				}
 				ImGui::TextUnformatted("Diagnostic mode skips BRDF work; timings are not representative.");
+			}
+			if (shadowTierView_) {
+				const ImVec4 colors[]{
+					{1.0f, 0.2f, 0.15f, 1.0f},
+					{1.0f, 0.8f, 0.1f, 1.0f},
+					{0.15f, 0.45f, 1.0f, 1.0f},
+					{0.65f, 0.25f, 1.0f, 1.0f},
+					{0.0f, 0.0f, 0.0f, 1.0f},
+				};
+				const char* labels[]{
+					"High / 1024", "Medium / 512", "Low / 256",
+					"Very low / 128",
+					"No shadowed point light",
+				};
+				for (int i = 0; i < 5; ++i) {
+					ImGui::PushID(100 + i);
+					ImGui::ColorButton("##tier", colors[i],
+						ImGuiColorEditFlags_NoTooltip, ImVec2(18, 18));
+					ImGui::SameLine();
+					ImGui::TextUnformatted(labels[i]);
+					ImGui::PopID();
+				}
 			}
 			ImGui::End();
 			const ImGuiIO& io = ImGui::GetIO();
@@ -151,6 +182,7 @@ namespace {
 	private:
 		Iryven::Engine& engine_;
 		bool lightCountView_ = false;
+		bool shadowTierView_ = false;
 		Iryven::CpuFrameTimings timings_{};
 		bool initialized_ = false;
 	};
@@ -189,6 +221,20 @@ namespace {
 
 int main()
 {
+	std::set_terminate([] {
+		try {
+			if (const auto exception = std::current_exception())
+				std::rethrow_exception(exception);
+		}
+		catch (const std::exception& exception) {
+			std::fprintf(stderr, "Unhandled exception: %s\n", exception.what());
+		}
+		catch (...) {
+			std::fprintf(stderr, "Unhandled non-standard exception\n");
+		}
+		std::fflush(stderr);
+		std::abort();
+	});
 	Iryven::Development::DevelopmentSession development;
 
 	Iryven::Engine engine({

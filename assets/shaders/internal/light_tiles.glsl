@@ -5,7 +5,11 @@
 const uint LIGHT_TILE_SIZE = 8u;
 const uint LIGHT_TILE_WORDS = 16u;
 
+#ifdef IRYVEN_LIGHT_TILES_WRITE
+layout(std430, set = 0, binding = 3) buffer LightTiles {
+#else
 layout(std430, set = 0, binding = 3) readonly buffer LightTiles {
+#endif
     // x=tile columns, y=tile rows, z=tile size, w=words per tile.
     uvec4 lightTileHeader;
     uint lightTileMasks[];

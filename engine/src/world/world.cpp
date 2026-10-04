@@ -191,10 +191,11 @@ namespace Iryven {
 
 		auto lightQuery = world_.query<const Transform, const Light>();
 		lightQuery.each(
-			[&scene](const Transform& transform, const Light& light)
+			[&scene](flecs::entity entity, const Transform& transform, const Light& light)
 			{
 				if (!light.enabled) return;
 				scene.lights.push_back(RenderLight{
+					.sourceId = entity.id(),
 					.type = light.type,
 					.position = transform.position,
 					.direction = glm::normalize(transform.rotation * glm::vec3{ 0.0f, 0.0f, -1.0f }),

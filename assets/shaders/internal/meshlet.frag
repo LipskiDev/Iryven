@@ -18,6 +18,7 @@ layout(push_constant) uniform DrawConstants {
 } draw;
 
 #include "gltf_material.glsl"
+// Material alpha semantics are evaluated by the shared shader.
 
 // 0: material, 1: meshlet ID, 2: world-space bounding sphere center.
 const uint debugMode = 0u;

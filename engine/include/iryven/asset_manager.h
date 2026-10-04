@@ -14,6 +14,7 @@ class AssetManager {
 public:
     [[nodiscard]] static std::filesystem::path NormalizePath(const std::filesystem::path& path);
     [[nodiscard]] ModelHandle LoadModel(const std::filesystem::path& path);
+    void ImportModel(const std::filesystem::path& source, const std::filesystem::path& destination);
     [[nodiscard]] MaterialHandle LoadMaterial(const std::filesystem::path& path);
     [[nodiscard]] TextureHandle LoadTexture(
         const std::filesystem::path& path,

@@ -1,0 +1,67 @@
+#version 460
+
+layout(local_size_x = 64) in;
+
+struct ShadowLight {
+    vec4 positionAndRange;
+    uvec4 info; // x=local-light index in the clustered tile masks.
+};
+
+struct ShadowObject {
+    vec4 centerAndRadius;
+    uvec4 info; // x=meshlet count.
+};
+
+layout(std140, set = 0, binding = 0) uniform ShadowCullData {
+    uvec4 counts; // x=lights, y=objects, z=tiles, w=mask words/tile.
+};
+layout(std430, set = 0, binding = 1) readonly buffer ShadowLights {
+    ShadowLight shadowLights[];
+};
+layout(std430, set = 0, binding = 2) readonly buffer ShadowObjects {
+    ShadowObject shadowObjects[];
+};
+layout(std430, set = 0, binding = 3) readonly buffer ClusteredTiles {
+    uvec4 tileHeader;
+    uint tileMasks[];
+};
+layout(std430, set = 0, binding = 4) writeonly buffer ShadowCommands {
+    uvec4 commands[]; // VkDrawMeshTasksIndirectCommandEXT plus padding.
+};
+
+shared uint lightTouchesVisibleCluster;
+
+void main() {
+    const uint lightIndex = gl_WorkGroupID.x;
+    const uint lane = gl_LocalInvocationID.x;
+    if (lightIndex >= counts.x) return;
+	if (shadowLights[lightIndex].info.y == 0u) return;
+
+    if (lane == 0u) lightTouchesVisibleCluster = 0u;
+    barrier();
+
+    const uint localLightIndex = shadowLights[lightIndex].info.x;
+    const uint word = localLightIndex >> 5u;
+    const uint bit = 1u << (localLightIndex & 31u);
+    if (word < counts.w) {
+        for (uint tile = lane; tile < counts.z; tile += gl_WorkGroupSize.x) {
+            if ((tileMasks[tile * counts.w + word] & bit) != 0u) {
+                atomicOr(lightTouchesVisibleCluster, 1u);
+                break;
+            }
+        }
+    }
+    barrier();
+
+    const ShadowLight light = shadowLights[lightIndex];
+    for (uint objectIndex = lane; objectIndex < counts.y;
+         objectIndex += gl_WorkGroupSize.x) {
+        const ShadowObject object = shadowObjects[objectIndex];
+        const vec3 delta = object.centerAndRadius.xyz - light.positionAndRange.xyz;
+        const float combinedRadius = object.centerAndRadius.w + light.positionAndRange.w;
+        const bool affected = lightTouchesVisibleCluster != 0u &&
+            dot(delta, delta) <= combinedRadius * combinedRadius;
+        commands[lightIndex * counts.y + objectIndex] = uvec4(
+            affected ? object.info.x : 0u, 6u, 1u, 0u);
+    }
+}

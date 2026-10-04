@@ -50,6 +50,21 @@ Context/input lifetime and frame scheduling belong to the engine; Vulkan initial
 and draw submission stay in its private renderer backend. Editor only includes the
 ImGui widget API and contains no graphics backend setup or device access.
 
+## Exporting Sandbox
+
+On Windows, build and package Sandbox, its required assets, and the MSVC runtime into
+one self-extracting executable:
+
+```powershell
+.\export-sandbox.ps1
+```
+
+The result is `dist\Sandbox.exe`. It extracts its versioned payload beneath
+`%LOCALAPPDATA%\Iryven\Sandbox` when launched. A Vulkan 1.3 driver and a GPU with
+mesh/task shader support are still required. Use `-SkipBuild` to package an existing
+Release build, `-IncludeSymbols` to include its PDB, or `-OutputPath` to choose another
+output file.
+
 ## Optional Live++ workflow
 
 Live++ is optional and is not required to build or run Iryven. To enable it locally, extract the Live++ distribution so that its API is located at `external/LivePP/API`, then regenerate the Visual Studio solution:

@@ -157,8 +157,11 @@ void main()
     payload.meshletIndex = meshletIndex;
     uint meshletId = draw.meshletInfo.x + payload.meshletIndex;
 
-    bool visible = IsMeshletVisible(meshlets[meshletId]) && !coneCull(meshlets[meshletId].center, meshlets[meshletId].radius, meshlets[meshletId].coneAxis, meshlets[meshletId].coneCutoff, cullingCameraPosition.xyz);
-    visible = visible && IsMeshletOcclusionVisible(meshlets[meshletId]);
+    // Keep model rendering conservative until cone bounds and Hi-Z bounds are
+    // transformed into the same space as the culling camera. The previous
+    // tests mixed model-local meshlet data with world/view-space inputs and
+    // could reject visible geometry, especially in models with node transforms.
+    bool visible = IsMeshletVisible(meshlets[meshletId]);
 
     payload.meshletIndex = meshletIndex;
     EmitMeshTasksEXT(visible ? 1u : 0u, 1u, 1u);

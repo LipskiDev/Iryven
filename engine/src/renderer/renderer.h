@@ -16,6 +16,7 @@
 #include <rhi/device.h>
 #include <iryven/assets/font.h>
 #include "bindless_texture_manager.h"
+#include "sparse_shadow_allocator.h"
 #include <iryven/renderer/asset_upload_queue.h>
 
 namespace Iryven {
@@ -36,6 +37,9 @@ namespace Iryven {
 
 	class Renderer final : public RenderContext {
 	public:
+		static constexpr std::uint64_t kDefaultPointShadowMemoryBudget =
+			128ull * 1024ull * 1024ull;
+
 		explicit Renderer(Window& window, AssetUploadQueue& assetUploads,
 			bool enableValidation = false);
 		~Renderer();
@@ -56,6 +60,7 @@ namespace Iryven {
 		void DrawScene(const RenderScene& renderScene) override;
 		void ToggleCullingCameraFreeze();
 		void SetLightCountView(bool enabled) { lightCountView_ = enabled; }
+		void SetShadowTierView(bool enabled) { shadowTierView_ = enabled; }
 		void InitializeImGui();
 		void ShutdownImGui();
 		void BeginImGuiFrame();
@@ -63,6 +68,22 @@ namespace Iryven {
 		void EndFrame();
 
 	private:
+		struct PointShadowAssignment {
+			std::size_t sceneIndex = 0;
+			std::uint32_t packedLightIndex = 0;
+			std::uint32_t localLightIndex = 0;
+			std::uint32_t mipLevel = 3;
+			std::uint32_t slot = 0;
+			std::uint32_t resolution = 0;
+			std::uint32_t firstPage = 0;
+			std::uint32_t pageCount = 0;
+			float projectedInfluence = 0.0f;
+		};
+		struct PointShadowHistory {
+			std::uint32_t slot = 0;
+			std::uint32_t resolution = 128;
+		};
+
 		bool cullingCameraFrozen_ = false;
 		bool cullingCameraValid_ = false;
 		FrameData cullingFrameData_{};
@@ -289,10 +310,12 @@ namespace Iryven {
 	private:
 		class GBufferPass;
 		class LightCullingPass;
+		class ShadowMappingPass;
 		class ShadingPass;
 		class HiZPass;
 		class ClothCompute;
 		class ForwardPass;
+		class TonemappingPass;
 
 		Window& window_;
 		AssetUploadQueue& assetUploads_;
@@ -307,12 +330,19 @@ namespace Iryven {
 		FrameGraph frameGraph_;
 		RendererCpuTimings cpuTimings_{};
 		bool lightCountView_ = false;
+		bool shadowTierView_ = false;
+		std::uint64_t pointShadowMemoryBudget_ = kDefaultPointShadowMemoryBudget;
+		SparseShadowAllocator sparseShadowAllocator_{};
+		std::vector<PointShadowAssignment> pointShadowAssignments_;
+		std::unordered_map<std::uint64_t, PointShadowHistory> pointShadowHistory_;
 		std::unique_ptr<GBufferPass> gbufferPass_;
 		std::unique_ptr<LightCullingPass> lightCullingPass_;
+		std::unique_ptr<ShadowMappingPass> shadowMappingPass_;
 		std::unique_ptr<HiZPass> hiZPass_;
 		std::unique_ptr<ShadingPass> shadingPass_;
 		std::unique_ptr<ClothCompute> clothCompute_;
 		std::unique_ptr<ForwardPass> forwardPass_;
+		std::unique_ptr<TonemappingPass> tonemappingPass_;
 
 		std::unordered_map<const MeshData*, GpuMesh> meshes_;
 		std::unordered_map<const Font*, GpuFont> fonts_;
