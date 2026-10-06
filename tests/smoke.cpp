@@ -768,6 +768,9 @@ int RunSmokeTests()
     assert(extractedModelScene.objects.size() == 1);
     assert(extractedModelScene.objects.front().model == model);
     assert(extractedModelScene.objects.front().indexCount == 3);
+	modelEntity.Get<Iryven::MeshRenderer>().hidden = true;
+	assert(modelWorld.ExtractRenderScene().objects.empty());
+	modelEntity.Get<Iryven::MeshRenderer>().hidden = false;
 
 	auto clothEntity = modelWorld.CreateEntity("Cloth");
 	clothEntity.Add<Iryven::Transform>();
@@ -1050,10 +1053,16 @@ int RunDeferredRendererTests();
 void RunDeferredShadingPixelTests(bool benchmark = false, const char* fragmentPath = nullptr);
 void RunLightTilingTests(bool benchmark = false, const char* shaderPath = nullptr);
 void RunSparseShadowAllocatorTests();
+void RunTweenTests();
+void RunMeshRendererVisibilityTest();
 
 int main(int argc, char** argv)
 {
     try {
+		RunTweenTests();
+		if (argc > 1 && std::string(argv[1]) == "--tween") return 0;
+		RunMeshRendererVisibilityTest();
+		if (argc > 1 && std::string(argv[1]) == "--render-visibility") return 0;
 		RunSparseShadowAllocatorTests();
         if (argc > 1 && std::string(argv[1]) == "--lighting-benchmark") {
             RunLightTilingTests(true, argc > 3 ? argv[3] : nullptr);

@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <unordered_map>
 #include <vector>
 
@@ -106,6 +107,9 @@ namespace Iryven {
 			Velos::RHI::ICommandList& commands,
 			const RenderObject& object,
 			const FrameData& frameData, std::uint32_t transmissionPhase = 0);
+		void DrawObjectBatch(
+			Velos::RHI::ICommandList& commands,
+			std::span<const RenderObject* const> objects);
 		void DrawText(Velos::RHI::ICommandList& commands,
 			const RenderText& text);
 		void DrawTransmissiveObjects(Velos::RHI::ICommandList& commands,
@@ -352,10 +356,12 @@ namespace Iryven {
 		std::vector<RetiredCloth> retiredCloths_;
 		std::uint64_t clothSceneGeneration_ = 0;
 		ShaderHandle gltfVertexShader_;
+		ShaderHandle gltfInstancedVertexShader_;
 		ShaderHandle gltfFragmentShader_;
 		ShaderHandle gbufferFragmentShader_;
 		ShaderHandle gbufferMeshletFragmentShader_;
 		PipelineHandle gltfPipeline_;
+		PipelineHandle gltfInstancedPipeline_;
 		std::array<PipelineHandle, 2> gltfTransmissionPipelines_{};
 		GeneratedPipelineLayout gltfGeneratedLayout_;
 		ShaderHandle clothVertexShader_;
@@ -374,6 +380,8 @@ namespace Iryven {
 		BindingPoolHandle fontBindingPool_;
 		std::array<std::vector<UploadBackedBuffer>, k_FramesInFlight>
 			textVertexBuffers_;
+		std::array<std::vector<UploadBackedBuffer>, k_FramesInFlight>
+			instanceBuffers_;
 
 		ShaderHandle meshletTaskShader_;
 		ShaderHandle  meshletShader_;

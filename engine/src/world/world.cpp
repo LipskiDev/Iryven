@@ -152,6 +152,8 @@ namespace Iryven {
 				const Transform& transform,
 				const MeshRenderer& meshRenderer)
 			{
+				if (meshRenderer.hidden) return;
+
 				if (meshRenderer.model) {
 					const ModelHandle& model = meshRenderer.model;
 					std::function<void(std::uint32_t, const glm::mat4&)> visitNode;

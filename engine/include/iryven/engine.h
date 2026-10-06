@@ -28,6 +28,7 @@ struct EngineConfig {
     uint32_t width = 1920;
     uint32_t height = 1080;
     bool enableImGui = false;
+	bool vsync = true;
 };
 
 struct CpuFrameTimings {

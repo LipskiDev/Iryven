@@ -1,5 +1,7 @@
 #include <iryven/assets/asynchronous_loader.h>
 
+#include <chrono>
+
 #include <algorithm>
 #include <thread>
 
@@ -144,9 +146,15 @@ namespace Iryven {
 
             switch (request.type) {
             case AssetType::Model: {
+				const auto loadStart = std::chrono::steady_clock::now();
+				auto model = assets_.LoadModel(request.path);
+				const double cpuLoadMilliseconds =
+					std::chrono::duration<double, std::milli>(
+						std::chrono::steady_clock::now() - loadStart).count();
                 AssetUploadRequest uploadRequest{
                     .handle = request.handle,
-                    .model = assets_.LoadModel(request.path),
+					.model = std::move(model),
+					.cpuLoadMilliseconds = cpuLoadMilliseconds,
                     .onComplete = [this, handle = request.handle] { MarkGpuUploadComplete(handle); },
                     .onFailure = [this, handle = request.handle](std::string error) {
                         MarkGpuUploadFailed(handle, std::move(error));

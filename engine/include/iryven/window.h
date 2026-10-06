@@ -16,11 +16,13 @@ namespace Iryven {
 		std::string title;
 		unsigned int width;
 		unsigned int height;
+		bool vsync = true;
 
 		WindowProperties(const std::string& title = "Iryven Engine",
 			uint32_t width = 1920,
-			uint32_t height = 1080)
-			: title(title), width(width), height(height)
+			uint32_t height = 1080,
+			bool vsync = true)
+			: title(title), width(width), height(height), vsync(vsync)
 		{
 		}
 	};

@@ -8,7 +8,7 @@ struct GLFWwindow;
 namespace Iryven {
 	class GlfwWindow : public Window {
 	public:
-		GlfwWindow(int width, int height, const std::string& title, bool resizable);
+		GlfwWindow(int width, int height, const std::string& title, bool resizable, bool vsync);
 		GlfwWindow(const GlfwWindow&) = delete;
 		GlfwWindow& operator=(const GlfwWindow&) = delete;
 		~GlfwWindow() override;

@@ -2,6 +2,7 @@
 #include "../renderer.h"
 #include "hi_z.h"
 #include <algorithm>
+#include <unordered_map>
 
 
 namespace Iryven {
@@ -35,9 +36,47 @@ namespace Iryven {
 		Velos::RHI::ICommandList& commands, const RenderScene& scene)
 	{
 		if (!hasCamera_) return;
+		struct BatchKey {
+			const MeshData* mesh = nullptr;
+			const Model* model = nullptr;
+			const Material* material = nullptr;
+			std::uint32_t firstIndex = 0;
+			std::uint32_t indexCount = 0;
+			std::int32_t vertexOffset = 0;
+			bool operator==(const BatchKey&) const = default;
+		};
+		struct BatchKeyHash {
+			std::size_t operator()(const BatchKey& key) const noexcept {
+				std::size_t hash = std::hash<const void*>{}(key.mesh);
+				const auto combine = [&hash](std::size_t value) {
+					hash ^= value + 0x9e3779b9u + (hash << 6u) + (hash >> 2u);
+				};
+				combine(std::hash<const void*>{}(key.model));
+				combine(std::hash<const void*>{}(key.material));
+				combine(key.firstIndex);
+				combine(key.indexCount);
+				combine(static_cast<std::uint32_t>(key.vertexOffset));
+				return hash;
+			}
+		};
+
+		std::unordered_map<BatchKey, std::vector<const RenderObject*>, BatchKeyHash>
+			batches;
+		batches.reserve(scene.objects.size());
 		for (const RenderObject& object : scene.objects) {
-			if (!object.material || object.material->transmission <= 0.0f)
-				renderer_.DrawObject(commands, object, frameData_);
+			if (object.material && object.material->transmission > 0.0f) continue;
+			batches[{
+				.mesh = object.mesh.get(),
+				.model = object.model.get(),
+				.material = object.material.get(),
+				.firstIndex = object.firstIndex,
+				.indexCount = object.indexCount,
+				.vertexOffset = object.vertexOffset,
+			}].push_back(&object);
+		}
+		for (const auto& [key, objects] : batches) {
+			if (objects.size() > 1) renderer_.DrawObjectBatch(commands, objects);
+			else renderer_.DrawObject(commands, *objects.front(), frameData_);
 		}
 		renderer_.DrawCloths(commands, scene);
 	}

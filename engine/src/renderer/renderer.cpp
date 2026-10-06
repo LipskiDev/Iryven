@@ -417,6 +417,11 @@ namespace Iryven {
 			DestroyUploadBackedBuffer(buffer);
 		}
 		retiredTextBuffers.clear();
+		auto& retiredInstanceBuffers = instanceBuffers_.at(frame_.frameIndex);
+		for (auto& buffer : retiredInstanceBuffers) {
+			DestroyUploadBackedBuffer(buffer);
+		}
+		retiredInstanceBuffers.clear();
 
 		auto& commands = device_->GetCommandList();
 		commands.Begin();
@@ -548,6 +553,73 @@ namespace Iryven {
 		commands.BindIndexBuffer(mesh ? mesh->indexBuffer : model->indexBuffer, Velos::RHI::IndexType::U32);
 		if (model) commands.DrawIndexed(object.indexCount, object.firstIndex, object.vertexOffset);
 		else commands.DrawIndexed(mesh->indexCount);
+	}
+
+	void Renderer::DrawObjectBatch(
+		Velos::RHI::ICommandList& commands,
+		std::span<const RenderObject* const> objects)
+	{
+		if (objects.size() < 2) {
+			throw std::invalid_argument("DrawObjectBatch requires at least two objects");
+		}
+		if (objects.size() > std::numeric_limits<std::uint32_t>::max()) {
+			throw std::overflow_error("Instance batch exceeds 32-bit draw limits");
+		}
+
+		const RenderObject& object = *objects.front();
+		GpuMesh* mesh = object.mesh ? ResolveOrCreateMesh(object.mesh) : nullptr;
+		GpuModel* model = object.model ? ResolveOrCreateModel(object.model) : nullptr;
+		if (!mesh && !model) return;
+
+		std::vector<glm::mat4> transforms;
+		transforms.reserve(objects.size());
+		for (const RenderObject* instance : objects) {
+			transforms.push_back(instance->transform);
+		}
+		const std::uint64_t transformBytes = transforms.size() * sizeof(glm::mat4);
+		auto instanceBuffer = CreateUploadBackedBuffer(
+			transformBytes, BufferUsage::Vertex,
+			"Iryven instance transform buffer",
+			"Iryven instance transform upload buffer");
+		UploadBuffer(commands, instanceBuffer, transforms.data(), transformBytes,
+			ResourceState::VertexBuffer);
+		const BufferHandle gpuInstanceBuffer = instanceBuffer.gpuBuffer;
+		instanceBuffers_.at(frame_.frameIndex).push_back(std::move(instanceBuffer));
+
+		const MaterialSlotKey materialKey{
+			.model = object.model.get(),
+			.material = object.material.get(),
+		};
+		const auto materialSlot = object.material
+			? materialSlots_.find(materialKey) : materialSlots_.end();
+		struct DrawConstants {
+			glm::mat4 model{1.0f};
+			std::uint32_t materialIndex = 0;
+			glm::uvec3 padding{0u};
+		};
+		static_assert(sizeof(DrawConstants) == 80);
+		const DrawConstants constants{
+			.model = glm::mat4(1.0f),
+			.materialIndex = materialSlot == materialSlots_.end()
+				? 0u : materialSlot->second,
+		};
+
+		commands.BindPipeline(gltfInstancedPipeline_);
+		commands.SetBindings(gltfInstancedPipeline_, 0,
+			lightingFrames_.at(frame_.frameIndex).lightBindingSet);
+		commands.SetBindings(gltfInstancedPipeline_, 1,
+			bindlessTextureManager_->BindingSet());
+		commands.PushConstants(ShaderStage::Vertex | ShaderStage::Fragment, 0,
+			static_cast<Velos::u32>(sizeof(constants)), &constants);
+		commands.BindVertexBuffer(0, mesh ? mesh->vertexBuffer : model->vertexBuffer);
+		commands.BindVertexBuffer(1, gpuInstanceBuffer);
+		commands.BindIndexBuffer(mesh ? mesh->indexBuffer : model->indexBuffer,
+			IndexType::U32);
+		commands.DrawIndexedInstanced(
+			model ? object.indexCount : mesh->indexCount,
+			static_cast<std::uint32_t>(objects.size()),
+			model ? object.firstIndex : 0u,
+			model ? object.vertexOffset : 0);
 	}
 
 	Renderer::GpuCloth* Renderer::ResolveOrCreateCloth(
@@ -1310,9 +1382,18 @@ namespace Iryven {
 		for (AssetUploadRequest& request : assetUploads_.Drain()) {
 			try {
 				if (request.model) {
+					const auto gpuStart = CpuClock::now();
 					if (!ResolveOrCreateModel(request.model)) {
 						throw std::runtime_error("Could not create GPU model resources");
 					}
+					const double gpuMilliseconds =
+						std::chrono::duration<double, std::milli>(
+							CpuClock::now() - gpuStart).count();
+					IRYVEN_CORE_INFO(
+						"Model '{}' ready: CPU load {:.2f} ms, GPU preparation/upload {:.2f} ms, total {:.2f} ms",
+						request.model->source.generic_string(),
+						request.cpuLoadMilliseconds, gpuMilliseconds,
+						request.cpuLoadMilliseconds + gpuMilliseconds);
 				}
 
 				if (request.onComplete) request.onComplete();
@@ -1340,6 +1421,12 @@ namespace Iryven {
 			.entryPoint = "main",
 			.language = Velos::ShaderSourceLanguage::SpirvBinary,
 		});
+		const auto gltfInstancedVertexShader = Velos::ShaderCompiler::CompileFile({
+			.path = "assets/shaders/internal/gltf_instanced.vert.spv",
+			.stage = Velos::RHI::ShaderStage::Vertex,
+			.entryPoint = "main",
+			.language = Velos::ShaderSourceLanguage::SpirvBinary,
+		});
 		gltfVertexShader_ = device_->CreateShader({
 			.stage = Velos::RHI::ShaderStage::Vertex,
 			.bytecode = gltfVertexShader.spirv.data(),
@@ -1356,6 +1443,15 @@ namespace Iryven {
 			.reflection = gltfFragmentShader.reflection,
 			.debugName = "Iryven glTF fragment shader",
 		});
+		gltfInstancedVertexShader_ = device_->CreateShader({
+			.stage = Velos::RHI::ShaderStage::Vertex,
+			.bytecode = gltfInstancedVertexShader.spirv.data(),
+			.bytecodeSize = static_cast<Velos::u64>(
+				gltfInstancedVertexShader.spirv.size() * sizeof(std::uint32_t)),
+			.entryPoint = "main",
+			.reflection = gltfInstancedVertexShader.reflection,
+			.debugName = "Iryven instanced glTF vertex shader",
+		});
 
 		const Velos::RHI::VertexBufferLayoutDesc gltfVertexLayout{
 			.stride = sizeof(Vertex),
@@ -1367,6 +1463,16 @@ namespace Iryven {
 				{.location = 3, .binding = 0, .format = Velos::RHI::VertexFormat::Float32x4, .offset = offsetof(Vertex, tangent)},
 				{.location = 4, .binding = 0, .format = Velos::RHI::VertexFormat::Float32x4, .offset = offsetof(Vertex, color)},
 			}
+		};
+		const Velos::RHI::VertexBufferLayoutDesc instanceTransformLayout{
+			.stride = sizeof(glm::mat4),
+			.inputRate = Velos::RHI::VertexInputRate::PerInstance,
+			.attributes = {
+				{.location = 5, .binding = 1, .format = Velos::RHI::VertexFormat::Float32x4, .offset = 0},
+				{.location = 6, .binding = 1, .format = Velos::RHI::VertexFormat::Float32x4, .offset = 16},
+				{.location = 7, .binding = 1, .format = Velos::RHI::VertexFormat::Float32x4, .offset = 32},
+				{.location = 8, .binding = 1, .format = Velos::RHI::VertexFormat::Float32x4, .offset = 48},
+			},
 		};
 		const std::array gltfReflections{
 			gltfVertexShader.reflection,
@@ -1436,6 +1542,12 @@ namespace Iryven {
         gltfDesc.fragmentShader = gbufferFragmentShader_;
         gltfDesc.colorAttachments = GBufferAttachments();
         gltfPipeline_ = device_->CreateGraphicsPipeline(gltfDesc);
+		gltfDesc.vertexShader = gltfInstancedVertexShader_;
+		gltfDesc.vertexLayouts = {gltfVertexLayout, instanceTransformLayout};
+		gltfDesc.debugName = "Iryven instanced glTF G-buffer pipeline";
+		gltfInstancedPipeline_ = device_->CreateGraphicsPipeline(gltfDesc);
+		gltfDesc.vertexShader = gltfVertexShader_;
+		gltfDesc.vertexLayouts = {gltfVertexLayout};
 		gltfDesc.fragmentShader = gltfFragmentShader_;
 		gltfDesc.colorAttachments.clear();
 		gltfDesc.colorFormat = Velos::RHI::Format::RGBA16_FLOAT;
@@ -1864,6 +1976,10 @@ namespace Iryven {
 			device_->DestroyPipeline(gltfPipeline_);
 			gltfPipeline_ = {};
 		}
+		if (gltfInstancedPipeline_) {
+			device_->DestroyPipeline(gltfInstancedPipeline_);
+			gltfInstancedPipeline_ = {};
+		}
 		if (gltfFragmentShader_) {
 			device_->DestroyShader(gltfFragmentShader_);
 			gltfFragmentShader_ = {};
@@ -1871,6 +1987,10 @@ namespace Iryven {
 		if (gltfVertexShader_) {
 			device_->DestroyShader(gltfVertexShader_);
 			gltfVertexShader_ = {};
+		}
+		if (gltfInstancedVertexShader_) {
+			device_->DestroyShader(gltfInstancedVertexShader_);
+			gltfInstancedVertexShader_ = {};
 		}
 	}
 
@@ -2201,6 +2321,8 @@ namespace Iryven {
 		if (const auto existing = models_.find(model.get()); existing != models_.end())
 			return &existing->second;
 		if (!model->IsValid()) return nullptr;
+		const auto gpuTotalStart = CpuClock::now();
+		const auto meshPreparationStart = CpuClock::now();
 
 		const std::size_t vertexBufferSize = model->vertices.size() * sizeof(Vertex);
 		const std::size_t indexBufferSize =
@@ -2267,11 +2389,15 @@ namespace Iryven {
 				primitiveMeshlets.push_back(gpuPrimitive);
 			}
 		}
+		const double meshPreparationMilliseconds =
+			std::chrono::duration<double, std::milli>(
+				CpuClock::now() - meshPreparationStart).count();
 
 		GpuModel gpuModel{
 			.source = model,
 			.primitiveMeshlets = std::move(primitiveMeshlets),
 		};
+		const auto bufferUploadStart = CpuClock::now();
 		try {
 			gpuModel.vertexBuffer = device_->CreateBuffer({
 				.size = vertexBufferSize,
@@ -2401,6 +2527,10 @@ namespace Iryven {
 			DestroyGpuModel(gpuModel);
 			throw;
 		}
+		const double bufferUploadMilliseconds =
+			std::chrono::duration<double, std::milli>(
+				CpuClock::now() - bufferUploadStart).count();
+		const auto textureUploadStart = CpuClock::now();
 		try {
 			gpuModel.samplers.reserve(model->textureRegistry.samplers.size());
 			const auto convertFilter = [](TextureFilter filter) {
@@ -2490,6 +2620,18 @@ namespace Iryven {
 			DestroyGpuModel(gpuModel);
 			throw;
 		}
+		const double textureUploadMilliseconds =
+			std::chrono::duration<double, std::milli>(
+				CpuClock::now() - textureUploadStart).count();
+		const double gpuTotalMilliseconds =
+			std::chrono::duration<double, std::milli>(
+				CpuClock::now() - gpuTotalStart).count();
+		IRYVEN_CORE_INFO(
+			"GPU model '{}': mesh streams {:.2f} ms, buffers {:.2f} ms, textures {:.2f} ms, total {:.2f} ms ({} vertices, {} indices, {} meshlets, {} textures)",
+			model->source.generic_string(), meshPreparationMilliseconds,
+			bufferUploadMilliseconds, textureUploadMilliseconds,
+			gpuTotalMilliseconds, model->vertices.size(), model->indices.size(),
+			gpuMeshlets.size(), model->textureRegistry.textures.size());
 		auto [entry, inserted] = models_.emplace(model.get(), std::move(gpuModel));
 		return &entry->second;
 	}
@@ -2683,6 +2825,12 @@ namespace Iryven {
 
 	void Renderer::DestroyBufferResources()
 	{
+		for (auto& buffers : instanceBuffers_) {
+			for (auto& buffer : buffers) {
+				DestroyUploadBackedBuffer(buffer);
+			}
+			buffers.clear();
+		}
 		for (auto& buffers : textVertexBuffers_) {
 			for (auto& buffer : buffers) {
 				DestroyUploadBackedBuffer(buffer);

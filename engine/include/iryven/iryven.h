@@ -17,6 +17,7 @@
 #include <iryven/layers/game_layer.h>
 #include <iryven/layers/ui_layer.h>
 #include <iryven/layers/debug_layer.h>
+#include <iryven/core/math.h>
 #include <iryven/events/event.h>
 #include <iryven/events/mouse_event.h>
 #include <iryven/events/application_event.h>

@@ -13,7 +13,7 @@ namespace Iryven {
 		IRYVEN_CORE_ERROR("GLFW ERROR ({0}): {1}", error, description);
 	}
 
-	GlfwWindow::GlfwWindow(int width, int height, const std::string& title, bool resizable)
+	GlfwWindow::GlfwWindow(int width, int height, const std::string& title, bool resizable, bool vsync)
 		: windowWidth_(width), windowHeight_(height), title_(title)
 	{
 		if (!glfwInit()) {
@@ -23,6 +23,7 @@ namespace Iryven {
 		glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 		glfwWindowHint(GLFW_RESIZABLE, resizable ? GLFW_TRUE : GLFW_FALSE);
 		glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+		glfwWindowHint(GLFW_DOUBLEBUFFER, vsync ? GLFW_TRUE : GLFW_FALSE);
 		glfwSetErrorCallback(GLFWErrorCallback);
 
 		window_ = glfwCreateWindow(windowWidth_, windowHeight_, title_.c_str(),

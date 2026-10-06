@@ -41,6 +41,7 @@ struct MeshRenderer {
     ModelHandle model;
     AssetHandle modelAsset;
     MaterialHandle material;
+    bool hidden = false;
 };
 
 }

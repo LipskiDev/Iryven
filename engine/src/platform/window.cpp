@@ -12,7 +12,8 @@ namespace Iryven {
 			properties.width,
 			properties.height,
 			properties.title,
-			true
+			true,
+			properties.vsync
 		);
 	}
 } // namespace Iryven

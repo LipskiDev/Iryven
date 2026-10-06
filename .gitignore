@@ -13,5 +13,6 @@
 Makefile
 *.make
 *.ttf
+*.iryasset
 runtime-startup-*.log
 /imgui.ini

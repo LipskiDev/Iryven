@@ -18,7 +18,7 @@ Engine::Engine(EngineConfig config)
 
     Log::Init();
 
-    window_ = Iryven::CreateWindow(WindowProperties(config_.title, config_.width, config_.height));
+    window_ = Iryven::CreateWindow(WindowProperties(config_.title, config_.width, config_.height, config_.vsync));
 
     asynchronousLoader_ = std::make_unique<AsynchronousLoader>(assets_, assetUploads_);
     renderer_ = std::make_unique<Renderer>(*window_, assetUploads_);

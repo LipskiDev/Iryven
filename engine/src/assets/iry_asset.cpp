@@ -1,9 +1,14 @@
 #include "iry_asset.h"
 
 #include <array>
+#include <chrono>
 #include <fstream>
+#include <limits>
 #include <stdexcept>
+#include <streambuf>
 #include <type_traits>
+
+#include <iryven/log.h>
 
 namespace Iryven::IryAsset {
 namespace {
@@ -12,6 +17,15 @@ constexpr std::array<char, 8> Magic{'I','R','Y','A','S','S','E','T'};
 constexpr std::uint32_t Version = 2;
 constexpr std::uint32_t ModelType = 1;
 constexpr std::uint64_t MaxElements = 1ull << 30;
+
+class MemoryInputBuffer final : public std::streambuf {
+public:
+    explicit MemoryInputBuffer(std::vector<char>& bytes)
+    {
+        char* begin = bytes.data();
+        setg(begin, begin, begin + bytes.size());
+    }
+};
 
 template<typename T> void Write(std::ostream& stream, const T& value)
 {
@@ -163,8 +177,24 @@ void WriteModel(const std::filesystem::path& path, const Model& model)
 
 ModelHandle ReadModel(const std::filesystem::path& path)
 {
-    std::ifstream stream(path, std::ios::binary);
-    if (!stream) throw std::runtime_error("Failed to open asset: " + path.string());
+    const auto diskStart = std::chrono::steady_clock::now();
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file) throw std::runtime_error("Failed to open asset: " + path.string());
+    const std::streampos end = file.tellg();
+    if (end < 0 || static_cast<std::uintmax_t>(end) >
+            static_cast<std::uintmax_t>(std::numeric_limits<std::streamsize>::max())) {
+        throw std::runtime_error("Asset is too large to read: " + path.string());
+    }
+    std::vector<char> bytes(static_cast<std::size_t>(end));
+    file.seekg(0, std::ios::beg);
+    file.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    if (!file) throw std::runtime_error("Failed to read asset: " + path.string());
+    const double diskMilliseconds = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - diskStart).count();
+
+    MemoryInputBuffer inputBuffer(bytes);
+    std::istream stream(&inputBuffer);
+    const auto deserializeStart = std::chrono::steady_clock::now();
     std::array<char, 8> magic{}; stream.read(magic.data(), magic.size());
     if (magic != Magic || Read<std::uint32_t>(stream) != Version || Read<std::uint32_t>(stream) != ModelType)
         throw std::runtime_error("Unsupported or corrupt .iryasset: " + path.string());
@@ -205,6 +235,13 @@ ModelHandle ReadModel(const std::filesystem::path& path)
     }
     model->sceneRoots = ReadPodVector<std::uint32_t>(stream);
     if (!model->IsValid()) throw std::runtime_error("Invalid model data in .iryasset: " + path.string());
+    const double deserializeMilliseconds =
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - deserializeStart).count();
+    IRYVEN_CORE_INFO(
+        ".iryasset '{}': disk read {:.2f} ms, deserialization {:.2f} ms, {:.2f} MiB",
+        path.generic_string(), diskMilliseconds, deserializeMilliseconds,
+        static_cast<double>(bytes.size()) / (1024.0 * 1024.0));
     return model;
 }
 
