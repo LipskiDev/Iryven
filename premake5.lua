@@ -27,6 +27,7 @@ IryvenPublicIncludeDirs = {
     "external/flecs/distr",
     "external/enkiTS/src",
     "external/meshoptimizer/src",
+    "external/miniaudio",
     "external/msdf-atlas-gen",
     "external/msdf-atlas-gen/msdfgen"
 }
@@ -49,6 +50,7 @@ include "premake/msdf.lua"
 include "premake/fastgltf.lua"
 include "premake/enkits.lua"
 include "premake/meshoptimizer.lua"
+include "premake/miniaudio.lua"
 
 project "Iryven"
     location "build/Iryven"
@@ -81,6 +83,7 @@ project "Iryven"
         "external/glfw/include",
         "external/velos/external/stb",
         "external/fastgltf/include",
+        "external/simdjson/singleheader",
         "engine/src/third_party",
         "external/velos/external/imgui", "external/velos/velos/core",
         "external/velos/external/volk", "external/velos/external/vma/include",
@@ -88,7 +91,7 @@ project "Iryven"
     }
     defines (IryvenPublicDefines)
     defines { "GLFW_INCLUDE_NONE", "IMGUI_IMPL_VULKAN_NO_PROTOTYPES" }
-    links { "Velos", "spdlog", "Flecs", "Box3D", "MSDFAtlasGen", "fastgltf", "enkiTS", "meshoptimizer" }
+    links { "Velos", "spdlog", "Flecs", "Box3D", "MSDFAtlasGen", "fastgltf", "enkiTS", "meshoptimizer", "miniaudio" }
 
     -- Compile GLSL to SPIR-V at build time. Runtime shader loading still
     -- performs reflection, but no longer invokes the GLSL compiler.

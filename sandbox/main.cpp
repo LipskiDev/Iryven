@@ -15,6 +15,8 @@
 #include <glm/ext/matrix_transform.hpp>
 #include <imgui.h>
 
+#include <miniaudio.h>
+
 namespace {
 
 	struct CameraMotion {
@@ -245,7 +247,15 @@ int main()
 		});
 	engine.PushOverlay(std::make_unique<FpsOverlay>(engine));
 
-	// Bistro is an optional local asset; a fresh clone uses the tracked Sponza scene.
+	ma_result result;
+	ma_engine maEngine;
+
+	result = ma_engine_init(NULL, &maEngine);
+	if (result != MA_SUCCESS) {
+		std::cerr << "Failed to initialize audio engine: " << result << std::endl;
+		return -1;
+	}	
+
 	auto sceneAsset = engine.GetAsyncLoader().RequestModel("assets/models/sponza/Sponza.gltf");
 
 	auto sceneEntity = engine.GetWorld().CreateEntity("Sponza");
@@ -264,7 +274,7 @@ int main()
 		.verticalFov = 52.0f,
 	});
 
-	for (uint32_t i = 0; i < 256; i++) {
+	for (uint32_t i = 0; i < 10; i++) {
 		auto light = world.CreateEntity("Point Light " + std::to_string(i));
 		light.Add<Iryven::Transform>(Iryven::Transform{
 			.position = glm::vec3{
@@ -282,8 +292,8 @@ int main()
 				static_cast<float>(std::rand()) / RAND_MAX,
 				1.0f,
 			},
-			.intensity = 10.5f,
-			.range = 3.0f,
+			.intensity = 20.5f,
+			.range = 30.0f,
 
 		});
 	}
@@ -314,6 +324,7 @@ int main()
 
 	world.AddSystem<Iryven::Camera, Iryven::Transform, CameraMotion>("Camera Control", [&](float deltaTime, Iryven::Camera&, Iryven::Transform& transform, CameraMotion& motion) {
 		if (deltaTime <= 0.0f) return;
+		static bool once = true;
 		const float moveSpeed = 5.0f;
 		const float lookSpeed = 60.0f; // Degrees per second.
 		const float moveResponse = 12.0f; // Higher values respond faster.
@@ -327,6 +338,12 @@ int main()
 		if (input.IsKeyDown(Iryven::Key::D)) moveDirection.x += 1.0f;
 		if (input.IsKeyDown(Iryven::Key::Space)) moveDirection.y += 1.0f;
 		if (input.IsKeyDown(Iryven::Key::LeftShift)) moveDirection.y -= 1.0f;
+		if (input.IsKeyDown(Iryven::Key::Escape)) {
+			if (once) {
+				once = false;
+				ma_engine_play_sound(&maEngine, "assets/audio/HaGay.mp3", NULL);
+			}
+		}
 
 		const glm::vec3 forward = glm::normalize(transform.rotation) * glm::vec3(0.0f, 0.0f, -1.0f);
 		float pitch = std::asin(glm::clamp(forward.y, -1.0f, 1.0f));
@@ -356,6 +373,5 @@ int main()
 		motion.velocity += (targetVelocity - motion.velocity) * moveBlend;
 	});
 
-	std::cout << "Collect all 5 ducks. Move with WASD or arrow keys.\n";
 	engine.Run();
 }

@@ -5,6 +5,7 @@
 #include <fstream>
 #include <iterator>
 #include <stdexcept>
+#include <simdjson.h>
 
 #include <glm/matrix.hpp>
 #include <glm/geometric.hpp>
@@ -255,7 +256,15 @@ namespace Iryven {
 
 	void World::SerializeScene(const std::filesystem::path& path) const
 	{
-		const auto json = world_.to_json();
+		auto query = world_.query_builder<SceneEntityTag>()
+			.query_flags(EcsQueryMatchDisabled | EcsQueryMatchPrefab).build();
+		flecs::iter_to_json_desc_t desc{};
+		desc.serialize_table = true;
+		desc.serialize_full_paths = true;
+		desc.serialize_entity_ids = true;
+		desc.serialize_values = true;
+		desc.serialize_parents_before_children = true;
+		const auto json = query.to_json(&desc);
 		if (!json.c_str()) {
 			throw std::runtime_error("Failed to serialize scene: " + path.string());
 		}
@@ -284,7 +293,31 @@ namespace Iryven {
 			json.find('\0') != std::string::npos) {
 			throw std::runtime_error("Invalid scene JSON: " + path.string());
 		}
-		const char* remaining = world_.from_json(json.c_str());
+		// Older saves contain the entire ECS world, including C++ component sizes
+		// and reflection offsets. Never import that metadata into the live registry.
+		std::string sceneJson = "{\"results\":[";
+		try {
+			simdjson::dom::parser parser;
+			const auto document = parser.parse(json);
+			bool first = true;
+			for (auto result : document["results"].get_array()) {
+				bool sceneEntity = false;
+				simdjson::dom::array tags;
+				if (!result["tags"].get_array().get(tags)) {
+					for (auto tag : tags) {
+						if (tag.get_string().value() == "Iryven.World.SceneEntityTag") sceneEntity = true;
+					}
+				}
+				if (!sceneEntity) continue;
+				if (!first) sceneJson += ',';
+				first = false;
+				sceneJson += simdjson::minify(result);
+			}
+		} catch (const simdjson::simdjson_error&) {
+			throw std::runtime_error("Invalid scene JSON: " + path.string());
+		}
+		sceneJson += "]}";
+		const char* remaining = world_.from_json(sceneJson.c_str());
 		if (!remaining || std::string_view{remaining}.find_first_not_of(" \t\r\n") != std::string_view::npos) {
 			throw std::runtime_error("Failed to deserialize scene: " + path.string());
 		}

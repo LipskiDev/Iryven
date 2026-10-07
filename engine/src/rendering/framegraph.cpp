@@ -404,7 +404,15 @@ void FrameGraphBuilder::RecreateResizableResources(
 
         for (FrameGraphResource& input : resources_) {
             if (input.outputHandle.handle == index && &input != &resource) {
+                // Attachment operations belong to the consuming pass, not the
+                // resized image. In particular, forward must retain Load.
+                const auto previous = std::get<FrameGraphTextureInfo>(input.info);
                 input.info = resource.info;
+                auto& updated = std::get<FrameGraphTextureInfo>(input.info);
+                updated.loadOp = previous.loadOp;
+                updated.clearColor = previous.clearColor;
+                updated.clearDepth = previous.clearDepth;
+                updated.clearStencil = previous.clearStencil;
             }
         }
     }

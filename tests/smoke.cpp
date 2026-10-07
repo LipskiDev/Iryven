@@ -83,7 +83,7 @@ private:
 
 } // namespace
 
-int RunSmokeTests()
+int RunSmokeTests(bool sceneOnly = false)
 {
 #ifdef _MSC_VER
     // Report test failures to the runner instead of opening a blocking CRT dialog.
@@ -167,12 +167,20 @@ int RunSmokeTests()
         const auto probeMesh = Iryven::PrimitiveMeshes::Cube();
 		assert(!probeMesh->meshlets.empty());
         probe.Add<Iryven::MeshRenderer>(probeMesh);
+        scene.CreateEntity("FreshMeshProbe").Add<Iryven::MeshRenderer>(probeMesh);
         const auto path = std::filesystem::temp_directory_path() /
             ("iryven-scene-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".json");
         scene.SerializeScene(path);
         std::ifstream file(path, std::ios::binary);
         const std::string json{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
         file.close();
+        assert(json.find("flecs.core.Component") == std::string::npos);
+        // Legacy full-world saves must not replace current C++ component sizes.
+        auto legacyJson = json;
+        legacyJson.insert(legacyJson.find('[') + 1,
+            "{\"parent\":\"Iryven\",\"name\":\"MeshRenderer\","
+            "\"components\":{\"flecs.core.Component\":{\"size\":56,\"alignment\":8}}},");
+        { std::ofstream legacyFile(path, std::ios::binary); legacyFile << legacyJson; }
         Iryven::World loadedScene;
         auto loadedProbe = loadedScene.CreateEntity("SerializationProbe");
         loadedProbe.Add<Iryven::Transform>();
@@ -183,7 +191,8 @@ int RunSmokeTests()
         loadedScene.ForEachEntity([&loadedEntityCount](Iryven::Entity) {
             ++loadedEntityCount;
         });
-        assert(loadedEntityCount == 3);
+        assert(loadedEntityCount == 4);
+        assert(loadedScene.GetFlecsWorld().lookup("FreshMeshProbe").has<Iryven::MeshRenderer>());
         assert(loadedProbe.Get<Iryven::Transform>().position == glm::vec3(3, 4, 5));
         assert(loadedProbe.Get<Iryven::Camera>().verticalFov == 75);
         assert(loadedProbe.Get<Iryven::Light>().intensity == 7);
@@ -220,6 +229,7 @@ int RunSmokeTests()
         }
         assert(rejectedDirectory);
     }
+	if (sceneOnly) return 0;
 	{
         Iryven::FrameGraphBuilder builder;
         Iryven::FrameGraph graph;
@@ -1056,9 +1066,53 @@ void RunSparseShadowAllocatorTests();
 void RunTweenTests();
 void RunMeshRendererVisibilityTest();
 
+int RunResizeTest()
+{
+    assert(glfwInit() != 0);
+    std::unique_ptr<Velos::RHI::IDevice, void(*)(Velos::RHI::IDevice*)> device(
+        Velos::RHI::CreateDevice({.graphicsAPI = Velos::RHI::GraphicsAPI::Vulkan,
+            .enableValidation = true, .applicationName = "Frame graph resize test",
+            .pipelineCachePath = nullptr}), Velos::RHI::DestroyDevice);
+    assert(device);
+    Iryven::FrameGraphBuilder builder;
+    builder.Init(*device);
+    Iryven::FrameGraph graph;
+    graph.Init(builder);
+    graph.AddNode({.name = "producer", .outputs = {{
+        .type = Iryven::FrameGraphResourceType::Attachment,
+        .info = Iryven::FrameGraphTextureInfo{.width = 16, .height = 16,
+            .format = Velos::RHI::Format::RGBA8_UNORM,
+            .usage = Velos::RHI::ImageUsage::ColorAttachment,
+            .loadOp = Iryven::RenderPassOperation::Clear, .resizeWithSwapchain = true},
+        .name = "color"}}});
+    graph.AddNode({.name = "consumer", .inputs = {{
+        .type = Iryven::FrameGraphResourceType::Attachment,
+        .access = Iryven::FrameGraphAccess::ColorAttachmentReadWrite,
+        .info = Iryven::FrameGraphTextureInfo{.loadOp = Iryven::RenderPassOperation::Load},
+        .name = "color"}}});
+    graph.Compile();
+    for (auto width : {32u, 64u, 24u}) {
+        graph.OnResize(*device, width, 24);
+        const auto& output = std::get<Iryven::FrameGraphTextureInfo>(graph.GetResource("color")->info);
+        const auto& input = std::get<Iryven::FrameGraphTextureInfo>(
+            graph.AccessResource(graph.GetNode("consumer")->inputs.front())->info);
+        assert(output.loadOp == Iryven::RenderPassOperation::Clear);
+        assert(input.loadOp == Iryven::RenderPassOperation::Load);
+        assert(input.width == width && input.height == 24);
+        assert(input.handle.id == output.handle.id && input.view.id == output.view.id);
+    }
+    graph.Shutdown();
+    builder.Shutdown();
+    device.reset();
+    glfwTerminate();
+    return 0;
+}
+
 int main(int argc, char** argv)
 {
     try {
+		if (argc > 1 && std::string(argv[1]) == "--resize") return RunResizeTest();
+		if (argc > 1 && std::string(argv[1]) == "--scene") return RunSmokeTests(true);
 		RunTweenTests();
 		if (argc > 1 && std::string(argv[1]) == "--tween") return 0;
 		RunMeshRendererVisibilityTest();

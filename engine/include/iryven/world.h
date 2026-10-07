@@ -42,6 +42,7 @@ public:
 
 	void SerializeScene(const std::filesystem::path& path) const;
 	// Imports into the existing world using Flecs merge semantics; does not clear it.
+	// Saves/imports only scene-tagged entities; legacy ECS registry metadata is ignored.
 	// Component values require registered reflection. Parse errors may leave partial changes.
 	void DeserializeScene(const std::filesystem::path& path);
 	[[nodiscard]] flecs::world& GetFlecsWorld() { return world_; }

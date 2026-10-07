@@ -8,6 +8,11 @@
 #include <cmath>
 #include <cstring>
 #include <unordered_set>
+#ifdef _WIN32
+#define NOMINMAX
+#include <windows.h>
+#include <commdlg.h>
+#endif
 
 EditorLayer::EditorLayer(Iryven::Engine& engine) : Layer("Editor"), engine_(engine) {}
 
@@ -481,6 +486,13 @@ void EditorLayer::DrawMeshRenderer(Iryven::Entity entity)
             ? std::filesystem::path{entity.Get<EditorModelAsset>().path}.filename().string()
             : "External model";
         if (ImGui::BeginCombo("Mesh", preview.c_str())) {
+            for (const auto& choice : EditorPrimitiveChoices()) {
+                if (ImGui::Selectable(choice.name)) {
+                    entity.Add<EditorRenderable>(EditorRenderable{.primitive = choice.primitive});
+                    ApplyEditorRenderable(entity);
+                }
+            }
+            if (!projectAssets_.empty()) ImGui::SeparatorText("Project assets");
             for (const auto& path : projectAssets_) {
                 const bool packaged = path.extension() == ".iryasset";
                 ImGui::BeginDisabled(!packaged);
@@ -554,7 +566,7 @@ void EditorLayer::RefreshAssets()
          iterator != end && !error; iterator.increment(error)) {
         if (!iterator->is_regular_file(error)) continue;
         const auto extension = iterator->path().extension().string();
-        if (extension == ".iryasset" || extension == ".obj" || extension == ".gltf" || extension == ".glb")
+        if (extension == ".iryasset")
             projectAssets_.push_back(iterator->path().lexically_normal());
     }
     std::ranges::sort(projectAssets_);
@@ -574,9 +586,13 @@ void EditorLayer::AssignModelAsset(const std::filesystem::path& path)
 void EditorLayer::ImportModelAsset(const std::filesystem::path& path)
 {
     if (path.extension() == ".iryasset") return;
-    auto destination = path;
+    auto destination = std::filesystem::path{"assets"} / path.filename();
     destination.replace_extension(".iryasset");
     try {
+        std::filesystem::create_directories("assets");
+        const auto base = destination.stem().string();
+        for (unsigned suffix = 1; std::filesystem::exists(destination); ++suffix)
+            destination = std::filesystem::path{"assets"} / (base + "_" + std::to_string(suffix) + ".iryasset");
         engine_.GetAssets().ImportModel(path, destination);
         sceneStatus_ = "Imported " + destination.generic_string();
         saveFailed_ = false;
@@ -589,11 +605,37 @@ void EditorLayer::ImportModelAsset(const std::filesystem::path& path)
 
 void EditorLayer::DrawAssetBrowser()
 {
+    ImGui::BeginDisabled(playing_);
+    if (ImGui::Button("Import Asset", {-1, 0})) {
+#ifdef _WIN32
+        std::array<wchar_t, 32768> filename{};
+        OPENFILENAMEW dialog{};
+        dialog.lStructSize = sizeof(dialog);
+        dialog.lpstrFilter = L"Model assets (*.obj;*.gltf;*.glb)\0*.obj;*.gltf;*.glb\0\0";
+        dialog.lpstrFile = filename.data();
+        dialog.nMaxFile = static_cast<DWORD>(filename.size());
+        dialog.lpstrTitle = L"Import Asset";
+        dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+        const auto library = LoadLibraryW(L"comdlg32.dll");
+        const auto openFile = library ? reinterpret_cast<decltype(&GetOpenFileNameW)>(
+            GetProcAddress(library, "GetOpenFileNameW")) : nullptr;
+        if (openFile && openFile(&dialog)) ImportModelAsset(std::filesystem::path{filename.data()});
+        else if (!openFile) {
+            sceneStatus_ = "Unable to open asset file dialog";
+            saveFailed_ = true;
+        }
+        if (library) FreeLibrary(library);
+#else
+        sceneStatus_ = "Asset file selection is unsupported on this platform";
+        saveFailed_ = true;
+#endif
+    }
+    ImGui::EndDisabled();
     if (ImGui::Button("Refresh", {-1, 0})) RefreshAssets();
     ImGui::Separator();
     if (projectAssets_.empty()) {
         ImGui::TextDisabled("No model assets found");
-        ImGui::TextWrapped("Place .obj, .gltf, .glb, or future .iryasset files under assets/.");
+        ImGui::TextWrapped("Use Import Asset to import an OBJ, glTF, or GLB model.");
         return;
     }
     std::filesystem::path assetToAssign;
