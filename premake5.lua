@@ -42,6 +42,11 @@ if not vulkanSdk then
 end
 local glslc = path.join(vulkanSdk, "Bin", "glslc.exe")
 
+local dxcRuntimeCopyCommands = {
+    '{COPYFILE} "$(WindowsSdkDir)bin\\$(TargetPlatformVersion)\\x64\\dxcompiler.dll" "%{cfg.targetdir}"',
+    '{COPYFILE} "$(WindowsSdkDir)bin\\$(TargetPlatformVersion)\\x64\\dxil.dll" "%{cfg.targetdir}"'
+}
+
 include "premake/velos.lua"
 include "premake/spdlog.lua"
 include "premake/flecs.lua"
@@ -152,28 +157,34 @@ project "Sandbox"
     location "build/Sandbox"
     kind "ConsoleApp"
     language "C++"
-    cppdialect "C++20"
+    cppdialect "C++23"
     staticruntime "off"
     targetdir ("bin/" .. outputdir .. "/%{prj.name}")
     objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
     debugdir (_WORKING_DIR)
-    files { "sandbox/**.h", "sandbox/**.cpp" }
-    includedirs (IryvenPublicIncludeDirs)
-    includedirs { "external/velos/external/imgui" }
-    defines (IryvenPublicDefines)
-    links { "Iryven" }
+    files { "sandbox/main.cpp", "sandbox/**.hlsl" }
+    filter "files:sandbox/**.hlsl"
+        buildaction "None"
+    filter {}
+    includedirs {
+        "external/velos/velos",
+        "external/velos/velos/core",
+        "external/velos/external/glm",
+        "external/velos/external/SPIRV-Reflect"
+    }
+    links { "Velos" }
 
     filter "system:windows"
         systemversion "latest"
         buildoptions { "/utf-8" }
+        links { "d3d12", "dxgi", "dxguid", "user32" }
+        postbuildcommands (dxcRuntimeCopyCommands)
 
     filter "configurations:Debug or DebugLivePP"
         runtime "Debug"
         symbols "On"
     filter { "system:windows", "configurations:DebugLivePP" }
         debugformat "C7"
-        defines { "IRYVEN_WITH_LIVEPP" }
-        includedirs { "external" }
         buildoptions { "/Gm-", "/Gy", "/Gw" }
         linkoptions { "/FUNCTIONPADMIN", "/OPT:NOREF", "/OPT:NOICF", "/DEBUG:FULL" }
     filter { "configurations:Release or Profile" }
@@ -199,6 +210,7 @@ project "Editor"
     filter "system:windows"
         systemversion "latest"
         buildoptions { "/utf-8" }
+        postbuildcommands (dxcRuntimeCopyCommands)
     filter "configurations:Debug or DebugLivePP"
         runtime "Debug"
         symbols "On"
@@ -225,6 +237,7 @@ project "IryvenTests"
     filter "system:windows"
         systemversion "latest"
         buildoptions { "/utf-8" }
+        postbuildcommands (dxcRuntimeCopyCommands)
     filter "configurations:Debug or DebugLivePP"
         runtime "Debug"
         symbols "On"
