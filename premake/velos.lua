@@ -3,6 +3,9 @@ local velos = path.join(root, "external/velos")
 local glfw = path.join(root, "external/glfw")
 local VulkanSDK = os.getenv("VULKAN_SDK")
 
+-- Runtime HLSL compilation uses the DXC import library from the Windows SDK.
+-- Executable projects copy dxcompiler.dll and dxil.dll beside their binaries.
+
 project "SPIRVReflect"
     location (path.join(root, "build/SPIRVReflect"))
     kind "StaticLib"
@@ -73,16 +76,30 @@ project "Velos"
         velos .. "/external/stb", velos .. "/external/SPIRV-Reflect", velos .. "/external/tracy/public"
     }
     links { "GLFW", "SPIRVReflect" }
-    defines { "_CRT_SECURE_NO_WARNINGS", "GLFW_INCLUDE_NONE" }
+    defines { "_CRT_SECURE_NO_WARNINGS", "GLFW_INCLUDE_NONE", "VK_NO_PROTOTYPES" }
     filter "system:windows"
+        -- D3D12 headers and import libraries are supplied by the Windows SDK.
+        -- Keep the backend Windows-only so non-Windows builds never parse the
+        -- platform headers or attempt to compile its sources.
         systemversion "latest"
-        defines { "VL_PLATFORM_WINDOWS" }
+        defines { "VL_PLATFORM_WINDOWS", "VL_HAS_D3D12" }
         includedirs { (VulkanSDK or "") .. "/Include" }
         libdirs { (VulkanSDK or "") .. "/Lib" }
-        links { "vulkan-1", "user32", "gdi32", "shell32", "ole32" }
+        links {
+            "vulkan-1",
+            "d3d12",
+            "dxgi",
+            "dxguid",
+            "dxcompiler",
+            "user32",
+            "gdi32",
+            "shell32",
+            "ole32"
+        }
     filter "system:linux"
         pic "On"
         defines { "VL_PLATFORM_LINUX" }
+        removefiles { velos .. "/velos/rhi/d3d12/**" }
         links { "vulkan", "dl", "pthread", "X11", "Xrandr", "Xi", "Xxf86vm", "Xinerama", "Xcursor", "shaderc" }
     filter "configurations:Debug or DebugLivePP"
         runtime "Debug"
