@@ -2,7 +2,6 @@
 
 namespace Iryven {
 
-class ParticleSpawnPass {
-};
+class ParticleSpawnPass {};
 
-} // namespace Iryven
+}  // namespace Iryven

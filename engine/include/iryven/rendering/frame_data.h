@@ -6,10 +6,10 @@
 namespace Iryven {
 
 struct FrameData {
-    glm::mat4 view{ 1.0f };
-    glm::mat4 projection{ 1.0f };
-    glm::mat4 viewProjection{ 1.0f };
-    glm::vec3 cameraPosition{ 0.0f };
+  glm::mat4 view{1.0f};
+  glm::mat4 projection{1.0f};
+  glm::mat4 viewProjection{1.0f};
+  glm::vec3 cameraPosition{0.0f};
 };
 
-} // namespace Iryven
+}  // namespace Iryven

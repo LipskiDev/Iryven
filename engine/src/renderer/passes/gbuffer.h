@@ -3,27 +3,34 @@
 
 namespace Iryven {
 
-	using CpuClock = std::chrono::steady_clock;
+using CpuClock = std::chrono::steady_clock;
 
-	[[nodiscard]] float ElapsedMilliseconds(CpuClock::time_point start);
+[[nodiscard]] float ElapsedMilliseconds(CpuClock::time_point start);
 
-	class Renderer::GBufferPass final : public FrameGraphRenderPass {
-	public:
-		explicit GBufferPass(Renderer& renderer) : renderer_(renderer) {}
+class Renderer::GBufferPass final : public FrameGraphRenderPass {
+ public:
+  explicit GBufferPass(Renderer &renderer) : renderer_(renderer) {}
 
-		void AddUI() override {}
+  void AddUI() override {}
 
-		void PreRender(
-			Velos::RHI::ICommandList& commands, const RenderScene& scene) override;
+  void PreRender(Velos::RHI::ICommandList &commands,
+                 const RenderScene &scene) override;
 
-		void Render(
-			Velos::RHI::ICommandList& commands, const RenderScene& scene) override;
+  void Render(Velos::RHI::ICommandList &commands,
+              const RenderScene &scene) override;
 
-		void OnResize(Velos::RHI::IDevice&, std::uint32_t, std::uint32_t) override;
+  void OnResize(Velos::RHI::IDevice &, std::uint32_t, std::uint32_t) override;
 
-	private:
-		Renderer& renderer_;
-		FrameData frameData_{};
-		bool hasCamera_ = false;
-	};
-}
+ private:
+  Renderer &renderer_;
+  FrameData frameData_{};
+  bool hasCamera_ = false;
+  struct PreparedBatch {
+    std::vector<const RenderObject *> objects;
+    PreparedObjectDraw draw;
+    PipelineHandle pipeline;
+    BufferHandle instances;
+  };
+  std::vector<PreparedBatch> preparedBatches_;
+};
+}  // namespace Iryven

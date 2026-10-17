@@ -31,15 +31,15 @@ project "spdlog"
         pic "On"
         links { "pthread" }
 
-    filter "configurations:Debug or DebugLivePP"
+    filter "configurations:Debug*"
         runtime "Debug"
         symbols "On"
 
-    filter "configurations:Release"
+    filter "configurations:Release*"
         runtime "Release"
         optimize "Speed"
 
-    filter "configurations:Profile"
+    filter "configurations:Profile*"
         runtime "Release"
         optimize "Speed"
         symbols "On"

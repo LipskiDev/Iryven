@@ -9,15 +9,15 @@
 
 namespace Iryven {
 
-    using InputBinding = std::variant<Key, MouseButton>;
+using InputBinding = std::variant<Key, MouseButton>;
 
-    struct InputAction {
-        std::string name;
-        std::vector<InputBinding> bindings;
+struct InputAction {
+  std::string name;
+  std::vector<InputBinding> bindings;
 
-        bool down = false;
-        bool pressed = false;
-        bool released = false;
-    };
+  bool down = false;
+  bool pressed = false;
+  bool released = false;
+};
 
-} // namespace Iryven
+}  // namespace Iryven

@@ -24,318 +24,317 @@ inline constexpr FrameGraphHandle InvalidFrameGraphHandle =
     std::numeric_limits<FrameGraphHandle>::max();
 
 struct FrameGraphResourceHandle {
-    FrameGraphHandle handle = InvalidFrameGraphHandle;
+  FrameGraphHandle handle = InvalidFrameGraphHandle;
 
-    [[nodiscard]] constexpr bool IsValid() const noexcept
-    {
-        return handle != InvalidFrameGraphHandle;
-    }
+  [[nodiscard]] constexpr bool IsValid() const noexcept {
+    return handle != InvalidFrameGraphHandle;
+  }
 
-    [[nodiscard]] constexpr explicit operator bool() const noexcept
-    {
-        return IsValid();
-    }
+  [[nodiscard]] constexpr explicit operator bool() const noexcept {
+    return IsValid();
+  }
 
-    friend constexpr bool operator==(const FrameGraphResourceHandle&,
-                                     const FrameGraphResourceHandle&) = default;
+  friend constexpr bool operator==(const FrameGraphResourceHandle &,
+                                   const FrameGraphResourceHandle &) = default;
 };
 
 struct FrameGraphNodeHandle {
-    FrameGraphHandle handle = InvalidFrameGraphHandle;
+  FrameGraphHandle handle = InvalidFrameGraphHandle;
 
-    [[nodiscard]] constexpr bool IsValid() const noexcept
-    {
-        return handle != InvalidFrameGraphHandle;
-    }
+  [[nodiscard]] constexpr bool IsValid() const noexcept {
+    return handle != InvalidFrameGraphHandle;
+  }
 
-    [[nodiscard]] constexpr explicit operator bool() const noexcept
-    {
-        return IsValid();
-    }
+  [[nodiscard]] constexpr explicit operator bool() const noexcept {
+    return IsValid();
+  }
 
-    friend constexpr bool operator==(const FrameGraphNodeHandle&,
-                                     const FrameGraphNodeHandle&) = default;
+  friend constexpr bool operator==(const FrameGraphNodeHandle &,
+                                   const FrameGraphNodeHandle &) = default;
 };
 
 enum class RenderPassOperation {
-    DontCare,
-    Load,
-    Clear,
+  DontCare,
+  Load,
+  Clear,
 };
 
 enum class FrameGraphResourceType {
-    Texture,
-    Buffer,
-    Attachment,
-    Reference,
+  Texture,
+  Buffer,
+  Attachment,
+  Reference,
 };
 
 // Describes how a pass uses a resource. Auto preserves the legacy conventions
 // (texture input = sampled read, attachment output = attachment write, etc.).
 enum class FrameGraphAccess {
-    Auto,
-    None,
+  Auto,
+  None,
 
-    VertexBufferRead,
-    IndexBufferRead,
-    UniformRead,
-    IndirectRead,
+  VertexBufferRead,
+  IndexBufferRead,
+  UniformRead,
+  IndirectRead,
 
-    ShaderSampledRead,
-    ShaderStorageRead,
-    ShaderStorageWrite,
-    ShaderStorageReadWrite,
+  ShaderSampledRead,
+  ShaderStorageRead,
+  ShaderStorageWrite,
+  ShaderStorageReadWrite,
 
-    ColorAttachmentRead,
-    ColorAttachmentWrite,
-    ColorAttachmentReadWrite,
-    DepthStencilRead,
-    DepthStencilWrite,
-    DepthStencilReadWrite,
+  ColorAttachmentRead,
+  ColorAttachmentWrite,
+  ColorAttachmentReadWrite,
+  DepthStencilRead,
+  DepthStencilWrite,
+  DepthStencilReadWrite,
 
-    TransferRead,
-    TransferWrite,
-    Present,
+  TransferRead,
+  TransferWrite,
+  Present,
 };
 
 struct FrameGraphBufferInfo {
-    std::size_t size = 0;
-    Velos::RHI::BufferUsage usage{};
-    Velos::RHI::BufferHandle handle{};
-    bool concurrentQueues = false;
+  std::size_t size = 0;
+  Velos::RHI::BufferUsage usage{};
+  Velos::RHI::BufferHandle handle{};
+  bool concurrentQueues = false;
 };
 
 struct FrameGraphTextureInfo {
-    std::uint32_t width = 0;
-    std::uint32_t height = 0;
-    std::uint32_t depth = 1;
-    std::uint32_t arrayLayers = 1;
-    Velos::RHI::Format format{};
-    Velos::RHI::ImageType imageType = Velos::RHI::ImageType::Image2D;
-    Velos::RHI::ImageViewType viewType = Velos::RHI::ImageViewType::View2D;
-    Velos::RHI::ImageUsage usage{};
-    RenderPassOperation loadOp = RenderPassOperation::DontCare;
-    Velos::RHI::ClearColor clearColor{};
-    float clearDepth = 1.0f;
-    std::uint32_t clearStencil = 0;
-    Velos::RHI::ImageHandle handle{};
-    Velos::RHI::ImageViewHandle view{};
-    bool resizeWithSwapchain = false;
-    bool concurrentQueues = false;
+  std::uint32_t width = 0;
+  std::uint32_t height = 0;
+  std::uint32_t depth = 1;
+  std::uint32_t arrayLayers = 1;
+  Velos::RHI::Format format{};
+  Velos::RHI::ImageType imageType = Velos::RHI::ImageType::Image2D;
+  Velos::RHI::ImageViewType viewType = Velos::RHI::ImageViewType::View2D;
+  Velos::RHI::ImageUsage usage{};
+  RenderPassOperation loadOp = RenderPassOperation::DontCare;
+  Velos::RHI::ClearColor clearColor{};
+  float clearDepth = 1.0f;
+  std::uint32_t clearStencil = 0;
+  Velos::RHI::ImageHandle handle{};
+  Velos::RHI::ImageViewHandle view{};
+  bool resizeWithSwapchain = false;
+  bool concurrentQueues = false;
 };
 
 using FrameGraphResourceInfo =
     std::variant<std::monostate, FrameGraphBufferInfo, FrameGraphTextureInfo>;
 
 struct FrameGraphResource {
-    FrameGraphResourceType type = FrameGraphResourceType::Texture;
-    FrameGraphAccess access = FrameGraphAccess::Auto;
-    FrameGraphResourceInfo info{};
-    bool external = false;
-    FrameGraphNodeHandle producer{};
-    FrameGraphResourceHandle outputHandle{};
-    std::uint32_t referenceCount = 0;
-    std::string name;
+  FrameGraphResourceType type = FrameGraphResourceType::Texture;
+  FrameGraphAccess access = FrameGraphAccess::Auto;
+  FrameGraphResourceInfo info{};
+  bool external = false;
+  FrameGraphNodeHandle producer{};
+  FrameGraphResourceHandle outputHandle{};
+  std::uint32_t referenceCount = 0;
+  std::string name;
 };
 
 struct FrameGraphResourceInputCreation {
-    FrameGraphResourceType type = FrameGraphResourceType::Texture;
-    FrameGraphAccess access = FrameGraphAccess::Auto;
-    FrameGraphResourceInfo info{};
-    bool external = false;
-    std::string name;
+  FrameGraphResourceType type = FrameGraphResourceType::Texture;
+  FrameGraphAccess access = FrameGraphAccess::Auto;
+  FrameGraphResourceInfo info{};
+  bool external = false;
+  std::string name;
 };
 
 struct FrameGraphResourceOutputCreation {
-    FrameGraphResourceType type = FrameGraphResourceType::Texture;
-    FrameGraphAccess access = FrameGraphAccess::Auto;
-    FrameGraphResourceInfo info{};
-    bool external = false;
-    std::string name;
+  FrameGraphResourceType type = FrameGraphResourceType::Texture;
+  FrameGraphAccess access = FrameGraphAccess::Auto;
+  FrameGraphResourceInfo info{};
+  bool external = false;
+  std::string name;
 };
 
 struct FrameGraphNodeCreation {
-    std::string name;
-    std::vector<FrameGraphResourceInputCreation> inputs;
-    std::vector<FrameGraphResourceOutputCreation> outputs;
-    Velos::RHI::QueueType queue = Velos::RHI::QueueType::Graphics;
-    bool enabled = true;
+  std::string name;
+  std::vector<FrameGraphResourceInputCreation> inputs;
+  std::vector<FrameGraphResourceOutputCreation> outputs;
+  Velos::RHI::QueueType queue = Velos::RHI::QueueType::Graphics;
+  bool enabled = true;
 };
 
 struct FrameGraphRenderPass {
-    virtual ~FrameGraphRenderPass() = default;
-    virtual void AddUI() = 0;
-    virtual void PreRender(Velos::RHI::ICommandList& commandList,
-                           const RenderScene& scene) = 0;
-    virtual void Render(Velos::RHI::ICommandList& commandList,
-                        const RenderScene& scene) = 0;
-    virtual void OnResize(Velos::RHI::IDevice& device,
-                          std::uint32_t width,
-                          std::uint32_t height) = 0;
+  virtual ~FrameGraphRenderPass() = default;
+  virtual void AddUI() = 0;
+  virtual void PreRender(Velos::RHI::ICommandList &commandList,
+                         const RenderScene &scene) = 0;
+  virtual void Render(Velos::RHI::ICommandList &commandList,
+                      const RenderScene &scene) = 0;
+  virtual void OnResize(Velos::RHI::IDevice &device, std::uint32_t width,
+                        std::uint32_t height) = 0;
 };
 
 struct FrameGraphNode {
-    std::uint32_t referenceCount = 0;
-    FrameGraphRenderPass* graphRenderPass = nullptr; // Non-owning.
-    std::vector<FrameGraphResourceHandle> inputs;
-    std::vector<FrameGraphResourceHandle> outputs;
-    std::vector<FrameGraphNodeHandle> edges;
-    Velos::RHI::QueueType queue = Velos::RHI::QueueType::Graphics;
-    bool enabled = true;
-    std::string name;
+  std::uint32_t referenceCount = 0;
+  FrameGraphRenderPass *graphRenderPass = nullptr;  // Non-owning.
+  std::vector<FrameGraphResourceHandle> inputs;
+  std::vector<FrameGraphResourceHandle> outputs;
+  std::vector<FrameGraphNodeHandle> edges;
+  Velos::RHI::QueueType queue = Velos::RHI::QueueType::Graphics;
+  bool enabled = true;
+  std::string name;
 };
 
 struct FrameGraphQueueBatch {
-    Velos::RHI::QueueType queue = Velos::RHI::QueueType::Graphics;
-    std::vector<FrameGraphNodeHandle> nodes;
-    std::vector<std::size_t> dependencies;
+  Velos::RHI::QueueType queue = Velos::RHI::QueueType::Graphics;
+  std::vector<FrameGraphNodeHandle> nodes;
+  std::vector<std::size_t> dependencies;
 };
 
 class FrameGraphBuilder {
-public:
-    static constexpr std::uint32_t kMaxNodes = 1024;
-    static constexpr std::uint32_t kMaxResources = 1024;
-    static constexpr std::uint32_t kMaxRenderPasses = 256;
+ public:
+  static constexpr std::uint32_t kMaxNodes = 1024;
+  static constexpr std::uint32_t kMaxResources = 1024;
+  static constexpr std::uint32_t kMaxRenderPasses = 256;
 
-    void Init(Velos::RHI::IDevice& device);
-    void Reset();
-    void Shutdown();
+  void Init(Velos::RHI::IDevice &device);
+  void Reset();
+  void Shutdown();
 
-    // The caller retains ownership and must keep the pass alive until Shutdown().
-    void RegisterRenderPass(std::string_view name, FrameGraphRenderPass& renderPass);
+  // The caller retains ownership and must keep the pass alive until Shutdown().
+  void RegisterRenderPass(std::string_view name,
+                          FrameGraphRenderPass &renderPass);
 
-    [[nodiscard]] FrameGraphResourceHandle CreateNodeOutput(
-        const FrameGraphResourceOutputCreation& creation,
-        FrameGraphNodeHandle producer);
-    [[nodiscard]] FrameGraphResourceHandle CreateNodeInput(
-        const FrameGraphResourceInputCreation& creation);
-    [[nodiscard]] FrameGraphNodeHandle CreateNode(const FrameGraphNodeCreation& creation);
+  [[nodiscard]] FrameGraphResourceHandle CreateNodeOutput(
+      const FrameGraphResourceOutputCreation &creation,
+      FrameGraphNodeHandle producer);
+  [[nodiscard]] FrameGraphResourceHandle CreateNodeInput(
+      const FrameGraphResourceInputCreation &creation);
+  [[nodiscard]] FrameGraphNodeHandle CreateNode(
+      const FrameGraphNodeCreation &creation);
 
-    [[nodiscard]] FrameGraphNode* GetNode(std::string_view name);
-    [[nodiscard]] const FrameGraphNode* GetNode(std::string_view name) const;
-    [[nodiscard]] FrameGraphNode* AccessNode(FrameGraphNodeHandle handle);
-    [[nodiscard]] const FrameGraphNode* AccessNode(FrameGraphNodeHandle handle) const;
+  [[nodiscard]] FrameGraphNode *GetNode(std::string_view name);
+  [[nodiscard]] const FrameGraphNode *GetNode(std::string_view name) const;
+  [[nodiscard]] FrameGraphNode *AccessNode(FrameGraphNodeHandle handle);
+  [[nodiscard]] const FrameGraphNode *AccessNode(
+      FrameGraphNodeHandle handle) const;
 
-    [[nodiscard]] FrameGraphResource* GetResource(std::string_view name);
-    [[nodiscard]] const FrameGraphResource* GetResource(std::string_view name) const;
-    [[nodiscard]] FrameGraphResource* AccessResource(FrameGraphResourceHandle handle);
-    [[nodiscard]] const FrameGraphResource* AccessResource(
-        FrameGraphResourceHandle handle) const;
+  [[nodiscard]] FrameGraphResource *GetResource(std::string_view name);
+  [[nodiscard]] const FrameGraphResource *GetResource(
+      std::string_view name) const;
+  [[nodiscard]] FrameGraphResource *AccessResource(
+      FrameGraphResourceHandle handle);
+  [[nodiscard]] const FrameGraphResource *AccessResource(
+      FrameGraphResourceHandle handle) const;
 
-    [[nodiscard]] Velos::RHI::IDevice& Device() const;
+  [[nodiscard]] Velos::RHI::IDevice &Device() const;
 
-private:
-    friend class FrameGraph;
+ private:
+  friend class FrameGraph;
 
-    void DestroyOwnedResources();
-    void AllocateResource(FrameGraphResource& resource);
-    void RecreateResizableResources(std::uint32_t width, std::uint32_t height);
+  void DestroyOwnedResources();
+  void AllocateResource(FrameGraphResource &resource);
+  void RecreateResizableResources(std::uint32_t width, std::uint32_t height);
 
-    Velos::RHI::IDevice* device_ = nullptr; // Non-owning.
-    std::vector<FrameGraphNode> nodes_;
-    std::vector<FrameGraphResource> resources_;
-    std::unordered_map<std::string, FrameGraphNodeHandle> nodeMap_;
-    std::unordered_map<std::string, FrameGraphResourceHandle> resourceMap_;
-    std::unordered_map<std::string, FrameGraphRenderPass*> renderPassMap_;
+  Velos::RHI::IDevice *device_ = nullptr;  // Non-owning.
+  std::vector<FrameGraphNode> nodes_;
+  std::vector<FrameGraphResource> resources_;
+  std::unordered_map<std::string, FrameGraphNodeHandle> nodeMap_;
+  std::unordered_map<std::string, FrameGraphResourceHandle> resourceMap_;
+  std::unordered_map<std::string, FrameGraphRenderPass *> renderPassMap_;
 };
 
 struct FrameGraphCpuTimings {
-    float schedulingMs = 0.0f;
-    float acquireCommandListMs = 0.0f;
-    float commandBeginMs = 0.0f;
-    float resourceSetupMs = 0.0f;
-    float preRenderMs = 0.0f;
-    float renderingSetupMs = 0.0f;
-    float drawRecordMs = 0.0f;
-    float commandEndMs = 0.0f;
-    float queueSubmitMs = 0.0f;
+  float schedulingMs = 0.0f;
+  float acquireCommandListMs = 0.0f;
+  float commandBeginMs = 0.0f;
+  float resourceSetupMs = 0.0f;
+  float preRenderMs = 0.0f;
+  float renderingSetupMs = 0.0f;
+  float drawRecordMs = 0.0f;
+  float commandEndMs = 0.0f;
+  float queueSubmitMs = 0.0f;
 };
 
 class FrameGraph {
-public:
-    void Init(FrameGraphBuilder& builder);
-    void Shutdown();
-    void Parse(const std::filesystem::path& path);
-    void Reset();
-    void EnableRenderPass(std::string_view renderPassName);
-    void DisableRenderPass(std::string_view renderPassName);
-    void Compile();
-    void AddUI();
-    void BeginFrame();
-    void Render(const RenderScene& scene);
-    void OnResize(Velos::RHI::IDevice& device,
-                  std::uint32_t width,
-                  std::uint32_t height);
+ public:
+  void Init(FrameGraphBuilder &builder);
+  void Shutdown();
+  void Parse(const std::filesystem::path &path);
+  void Reset();
+  void EnableRenderPass(std::string_view renderPassName);
+  void DisableRenderPass(std::string_view renderPassName);
+  void Compile();
+  void AddUI();
+  void BeginFrame();
+  void Render(const RenderScene &scene);
+  void OnResize(Velos::RHI::IDevice &device, std::uint32_t width,
+                std::uint32_t height);
 
-    [[nodiscard]] FrameGraphNode* GetNode(std::string_view name);
-    [[nodiscard]] const FrameGraphNode* GetNode(std::string_view name) const;
-    [[nodiscard]] FrameGraphNode* AccessNode(FrameGraphNodeHandle handle);
-    [[nodiscard]] const FrameGraphNode* AccessNode(FrameGraphNodeHandle handle) const;
-    [[nodiscard]] FrameGraphResource* GetResource(std::string_view name);
-    [[nodiscard]] const FrameGraphResource* GetResource(std::string_view name) const;
-    [[nodiscard]] FrameGraphResource* AccessResource(FrameGraphResourceHandle handle);
-    [[nodiscard]] const FrameGraphResource* AccessResource(
-        FrameGraphResourceHandle handle) const;
+  [[nodiscard]] FrameGraphNode *GetNode(std::string_view name);
+  [[nodiscard]] const FrameGraphNode *GetNode(std::string_view name) const;
+  [[nodiscard]] FrameGraphNode *AccessNode(FrameGraphNodeHandle handle);
+  [[nodiscard]] const FrameGraphNode *AccessNode(
+      FrameGraphNodeHandle handle) const;
+  [[nodiscard]] FrameGraphResource *GetResource(std::string_view name);
+  [[nodiscard]] const FrameGraphResource *GetResource(
+      std::string_view name) const;
+  [[nodiscard]] FrameGraphResource *AccessResource(
+      FrameGraphResourceHandle handle);
+  [[nodiscard]] const FrameGraphResource *AccessResource(
+      FrameGraphResourceHandle handle) const;
 
-    void AddNode(const FrameGraphNodeCreation& node);
+  void AddNode(const FrameGraphNodeCreation &node);
 
-    [[nodiscard]] std::span<const FrameGraphNodeHandle> ExecutionOrder() const noexcept
-    {
-        return executionOrder_;
-    }
+  [[nodiscard]] std::span<const FrameGraphNodeHandle> ExecutionOrder()
+      const noexcept {
+    return executionOrder_;
+  }
 
-    [[nodiscard]] std::span<const FrameGraphQueueBatch> ExecutionBatches() const noexcept
-    {
-        return executionBatches_;
-    }
+  [[nodiscard]] std::span<const FrameGraphQueueBatch> ExecutionBatches()
+      const noexcept {
+    return executionBatches_;
+  }
 
-    [[nodiscard]] std::string DescribeExecutionBatches() const;
+  [[nodiscard]] std::string DescribeExecutionBatches() const;
 
-    [[nodiscard]] std::span<const Velos::RHI::TimelineSemaphorePoint>
-    GraphicsSubmissionWaits() const noexcept
-    {
-        return graphicsSubmissionWaits_;
-    }
+  [[nodiscard]] std::span<const Velos::RHI::TimelineSemaphorePoint>
+  GraphicsSubmissionWaits() const noexcept {
+    return graphicsSubmissionWaits_;
+  }
 
-    [[nodiscard]] const FrameGraphCpuTimings& GetCpuTimings() const noexcept
-    {
-        return cpuTimings_;
-    }
+  [[nodiscard]] const FrameGraphCpuTimings &GetCpuTimings() const noexcept {
+    return cpuTimings_;
+  }
 
-private:
-    struct TrackedResourceState {
-        FrameGraphAccess access = FrameGraphAccess::None;
-        Velos::RHI::ImageLayout layout = Velos::RHI::ImageLayout::Undefined;
-        Velos::RHI::QueueType queue = Velos::RHI::QueueType::Graphics;
-        Velos::RHI::TimelineSemaphorePoint completion{};
-        std::uint32_t physicalHandle = Velos::RHI::kInvalidHandle;
-        bool image = false;
-        bool initialized = false;
-    };
+ private:
+  struct TrackedResourceState {
+    FrameGraphAccess access = FrameGraphAccess::None;
+    Velos::RHI::ImageLayout layout = Velos::RHI::ImageLayout::Undefined;
+    Velos::RHI::QueueType queue = Velos::RHI::QueueType::Graphics;
+    Velos::RHI::TimelineSemaphorePoint completion{};
+    std::uint32_t physicalHandle = Velos::RHI::kInvalidHandle;
+    bool image = false;
+    bool initialized = false;
+  };
 
-    struct QueueTimelineState {
-        Velos::RHI::QueueType queue = Velos::RHI::QueueType::Graphics;
-        Velos::RHI::SemaphoreHandle semaphore{};
-        std::uint64_t nextSignalValue = 1;
-    };
+  struct QueueTimelineState {
+    Velos::RHI::QueueType queue = Velos::RHI::QueueType::Graphics;
+    Velos::RHI::SemaphoreHandle semaphore{};
+    std::uint64_t nextSignalValue = 1;
+  };
 
-    void RecordBatch(const FrameGraphQueueBatch& batch,
-                     Velos::RHI::ICommandList& commandList,
-                     const RenderScene& scene);
-    [[nodiscard]] Velos::RHI::QueueRelationship QueueRelationship(
-        Velos::RHI::QueueType first,
-        Velos::RHI::QueueType second) const;
-    QueueTimelineState& TimelineFor(Velos::RHI::QueueType queue);
-    void DestroyTimelines();
+  void RecordBatch(const FrameGraphQueueBatch &batch,
+                   Velos::RHI::ICommandList &commandList,
+                   const RenderScene &scene);
+  [[nodiscard]] Velos::RHI::QueueRelationship QueueRelationship(
+      Velos::RHI::QueueType first, Velos::RHI::QueueType second) const;
+  QueueTimelineState &TimelineFor(Velos::RHI::QueueType queue);
+  void DestroyTimelines();
 
-    std::vector<FrameGraphNodeHandle> nodes_;
-    std::vector<FrameGraphNodeHandle> executionOrder_;
-    std::vector<FrameGraphQueueBatch> executionBatches_;
-    std::vector<TrackedResourceState> resourceStates_;
-    std::vector<QueueTimelineState> queueTimelines_;
-    std::vector<Velos::RHI::TimelineSemaphorePoint> graphicsSubmissionWaits_;
-    FrameGraphCpuTimings cpuTimings_{};
-    FrameGraphBuilder* builder_ = nullptr; // Non-owning.
+  std::vector<FrameGraphNodeHandle> nodes_;
+  std::vector<FrameGraphNodeHandle> executionOrder_;
+  std::vector<FrameGraphQueueBatch> executionBatches_;
+  std::vector<TrackedResourceState> resourceStates_;
+  std::vector<QueueTimelineState> queueTimelines_;
+  std::vector<Velos::RHI::TimelineSemaphorePoint> graphicsSubmissionWaits_;
+  FrameGraphCpuTimings cpuTimings_{};
+  FrameGraphBuilder *builder_ = nullptr;  // Non-owning.
 };
 
-} // namespace Iryven
+}  // namespace Iryven

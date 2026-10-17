@@ -13,9 +13,8 @@ namespace Iryven::PrimitiveMeshes {
     std::uint32_t segments = 32, std::uint32_t rings = 16);
 [[nodiscard]] std::shared_ptr<const MeshData> Cylinder(
     std::uint32_t segments = 32);
-[[nodiscard]] std::shared_ptr<const MeshData> Cone(
-    std::uint32_t segments = 32);
+[[nodiscard]] std::shared_ptr<const MeshData> Cone(std::uint32_t segments = 32);
 // A unit quad on the XZ plane, facing +Y.
 [[nodiscard]] std::shared_ptr<const MeshData> Plane();
 
-} // namespace Iryven::PrimitiveMeshes
+}  // namespace Iryven::PrimitiveMeshes

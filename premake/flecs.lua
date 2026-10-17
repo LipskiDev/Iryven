@@ -21,10 +21,10 @@ project "Flecs"
     filter "system:linux"
         pic "On"
         links { "pthread" }
-    filter "configurations:Debug or DebugLivePP"
+    filter "configurations:Debug*"
         runtime "Debug"
         symbols "On"
-    filter { "configurations:Release or Profile" }
+    filter { "configurations:Release* or Profile*" }
         runtime "Release"
         optimize "Speed"
     filter {}

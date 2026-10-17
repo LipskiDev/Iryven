@@ -7,5 +7,4 @@ namespace Iryven {
 
 using AssetHandle = Handle<AssetTag>;
 
-
-} // namespace Iryven
+}  // namespace Iryven

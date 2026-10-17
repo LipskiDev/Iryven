@@ -10,30 +10,25 @@ namespace Iryven::Development {
 
 struct DevelopmentSession::Impl {
 #ifdef IRYVEN_WITH_LIVEPP
-    Impl()
-        : livePPAgent(lpp::LppCreateDefaultAgent(nullptr, L"external/LivePP")) {
-        if (!lpp::LppIsValidDefaultAgent(&livePPAgent)) {
-            throw std::runtime_error("Failed to initialize Live++");
-        }
-
-        livePPAgent.EnableModule(
-            lpp::LppGetCurrentModulePath(),
-            lpp::LPP_MODULES_OPTION_ALL_IMPORT_MODULES,
-            nullptr,
-            nullptr);
+  Impl()
+      : livePPAgent(lpp::LppCreateDefaultAgent(nullptr, L"external/LivePP")) {
+    if (!lpp::LppIsValidDefaultAgent(&livePPAgent)) {
+      throw std::runtime_error("Failed to initialize Live++");
     }
 
-    ~Impl() {
-        lpp::LppDestroyDefaultAgent(&livePPAgent);
-    }
+    livePPAgent.EnableModule(lpp::LppGetCurrentModulePath(),
+                             lpp::LPP_MODULES_OPTION_ALL_IMPORT_MODULES,
+                             nullptr, nullptr);
+  }
 
-    lpp::LppDefaultAgent livePPAgent;
+  ~Impl() { lpp::LppDestroyDefaultAgent(&livePPAgent); }
+
+  lpp::LppDefaultAgent livePPAgent;
 #endif
 };
 
-DevelopmentSession::DevelopmentSession()
-    : impl_(std::make_unique<Impl>()) {}
+DevelopmentSession::DevelopmentSession() : impl_(std::make_unique<Impl>()) {}
 
 DevelopmentSession::~DevelopmentSession() = default;
 
-} // namespace Iryven::Development
+}  // namespace Iryven::Development

@@ -5,7 +5,7 @@
 
 namespace Iryven::IryAsset {
 
-void WriteModel(const std::filesystem::path& path, const Model& model);
-[[nodiscard]] ModelHandle ReadModel(const std::filesystem::path& path);
+void WriteModel(const std::filesystem::path &path, const Model &model);
+[[nodiscard]] ModelHandle ReadModel(const std::filesystem::path &path);
 
-}
+}  // namespace Iryven::IryAsset

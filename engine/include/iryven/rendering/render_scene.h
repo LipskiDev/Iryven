@@ -10,12 +10,12 @@
 #include <iryven/rendering/render_cloth.h>
 
 namespace Iryven {
-	struct RenderScene {
-		std::optional<RenderCamera> camera;
-		std::vector<RenderObject> objects;
-		std::vector<RenderLight> lights;
-		std::vector<RenderText> texts;
-		std::vector<RenderCloth> cloths;
-		float deltaTime = 0.0f;
-	};
-}
+struct RenderScene {
+  std::optional<RenderCamera> camera;
+  std::vector<RenderObject> objects;
+  std::vector<RenderLight> lights;
+  std::vector<RenderText> texts;
+  std::vector<RenderCloth> cloths;
+  float deltaTime = 0.0f;
+};
+}  // namespace Iryven

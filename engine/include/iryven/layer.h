@@ -10,28 +10,27 @@ namespace Iryven {
 class RenderContext;
 
 class Layer {
-public:
-    explicit Layer(std::string name = "Layer")
-        : name_(std::move(name)) {}
-    virtual ~Layer() = default;
+ public:
+  explicit Layer(std::string name = "Layer") : name_(std::move(name)) {}
+  virtual ~Layer() = default;
 
-    Layer(const Layer&) = delete;
-    Layer& operator=(const Layer&) = delete;
+  Layer(const Layer &) = delete;
+  Layer &operator=(const Layer &) = delete;
 
-    virtual void OnAttach() {}
-    virtual void OnDetach() {}
-    virtual void OnUpdate(float deltaTime) {}
-    virtual void OnRender(RenderContext& context) {}
-    // Called inside an ImGui frame when EngineConfig::enableImGui is enabled.
-    virtual void OnImGuiRender() {}
+  virtual void OnAttach() {}
+  virtual void OnDetach() {}
+  virtual void OnUpdate(float deltaTime) {}
+  virtual void OnRender(RenderContext &context) {}
+  // Called inside an ImGui frame when EngineConfig::enableImGui is enabled.
+  virtual void OnImGuiRender() {}
 
-    // Returning true consumes the event and stops propagation to lower layers.
-    virtual bool OnEvent(Event& event) { return false; }
+  // Returning true consumes the event and stops propagation to lower layers.
+  virtual bool OnEvent(Event &event) { return false; }
 
-    [[nodiscard]] const std::string& GetName() const noexcept { return name_; }
+  [[nodiscard]] const std::string &GetName() const noexcept { return name_; }
 
-private:
-    std::string name_;
+ private:
+  std::string name_;
 };
 
-} // namespace Iryven
+}  // namespace Iryven

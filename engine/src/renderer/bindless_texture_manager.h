@@ -7,53 +7,64 @@
 
 namespace Iryven {
 
-	using BindlessTextureIndex = uint32_t;
+// Packed texture slot (low 12 bits) and shared sampler slot (upper bits).
+using BindlessTextureIndex = uint32_t;
 
-	class BindlessTextureManager {
-	public:
-		BindlessTextureManager(
-			Velos::RHI::IDevice& device,
-			uint32_t capacity
-		);
-		~BindlessTextureManager();
+class BindlessTextureManager {
+ public:
+  BindlessTextureManager(Velos::RHI::IDevice &device, uint32_t capacity);
+  ~BindlessTextureManager();
 
-		BindlessTextureManager(const BindlessTextureManager&) = delete;
-		BindlessTextureManager& operator=(const BindlessTextureManager&) = delete;
+  BindlessTextureManager(const BindlessTextureManager &) = delete;
+  BindlessTextureManager &operator=(const BindlessTextureManager &) = delete;
 
-		BindlessTextureIndex Register(
-			Velos::RHI::ImageViewHandle view,
-			Velos::RHI::SamplerHandle sampler
-		);
+  BindlessTextureIndex Register(Velos::RHI::ImageViewHandle view,
+                                const Velos::RHI::SamplerDesc &sampler);
 
-		void Release(BindlessTextureIndex index, uint64_t retirementSubmission);
+  static constexpr uint32_t TextureSlot(BindlessTextureIndex reference) {
+    return reference & 4095u;
+  }
+  static constexpr uint32_t SamplerSlot(BindlessTextureIndex reference) {
+    return reference >> 12u;
+  }
 
-		void CollectGarbage(uint64_t completedSubmission);
+  void Release(BindlessTextureIndex index, uint64_t retirementSubmission);
 
-		[[nodiscard]] Velos::RHI::BindingLayoutHandle Layout() const;
-		[[nodiscard]] Velos::RHI::BindingSetHandle BindingSet() const;
+  void CollectGarbage(uint64_t completedSubmission);
 
-	private:
-		Velos::RHI::IDevice& device_;
-		Velos::RHI::BindingLayoutHandle bindingLayout_;
-		Velos::RHI::BindingSetHandle bindingSet_;
-		Velos::RHI::BindingPoolHandle bindingPool_;
-		uint32_t capacity_;
+  [[nodiscard]] Velos::RHI::BindingLayoutHandle Layout() const;
+  [[nodiscard]] Velos::RHI::BindingSetHandle BindingSet() const;
 
-		std::vector<BindlessTextureIndex> freeIndices_;
+ private:
+  Velos::RHI::IDevice &device_;
+  Velos::RHI::BindingLayoutHandle bindingLayout_;
+  Velos::RHI::BindingSetHandle bindingSet_;
+  Velos::RHI::BindingPoolHandle bindingPool_;
+  uint32_t capacity_;
 
-		struct ReleasedTexture {
-			BindlessTextureIndex index;
-			uint64_t retirementSubmission;
-		};
+  std::vector<BindlessTextureIndex> freeIndices_;
+  static constexpr uint32_t kSamplerCapacity = 128;
+  struct SharedSampler {
+    Velos::RHI::SamplerDesc desc;
+    Velos::RHI::SamplerHandle handle;
+    uint32_t references = 0;
+  };
+  std::vector<SharedSampler> sharedSamplers_;
+  std::vector<uint32_t> textureSamplers_;
+  uint32_t FindOrCreateSampler(const Velos::RHI::SamplerDesc &desc);
 
-		std::vector<ReleasedTexture> retiredSlots_;
-		enum class SlotState : std::uint8_t { Free, Active, Retired };
-		std::vector<SlotState> slotStates_;
-		void WriteDescriptor(
-			BindlessTextureIndex index,
-			Velos::RHI::ImageViewHandle view,
-			Velos::RHI::SamplerHandle sampler);
+  struct ReleasedTexture {
+    BindlessTextureIndex index;
+    uint64_t retirementSubmission;
+  };
 
-		BindlessTextureIndex nextIndex_ = 0;
-	};
-}
+  std::vector<ReleasedTexture> retiredSlots_;
+  enum class SlotState : std::uint8_t { Free, Active, Retired };
+  std::vector<SlotState> slotStates_;
+  void WriteDescriptor(BindlessTextureIndex index,
+                       Velos::RHI::ImageViewHandle view,
+                       const Velos::RHI::SamplerDesc &sampler);
+
+  BindlessTextureIndex nextIndex_ = 0;
+};
+}  // namespace Iryven

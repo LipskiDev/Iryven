@@ -15,10 +15,10 @@ project "SPIRVReflect"
     objdir (path.join(root, "bin-int/" .. outputdir .. "/%{prj.name}"))
     files { velos .. "/external/SPIRV-Reflect/spirv_reflect.h", velos .. "/external/SPIRV-Reflect/spirv_reflect.c" }
     includedirs { velos .. "/external/SPIRV-Reflect" }
-    filter "configurations:Debug or DebugLivePP"
+    filter "configurations:Debug*"
         runtime "Debug"
         symbols "On"
-    filter { "configurations:Release or Profile" }
+    filter { "configurations:Release* or Profile*" }
         runtime "Release"
         optimize "Speed"
     filter {}
@@ -53,10 +53,10 @@ project "GLFW"
         pic "On"
         defines { "_GLFW_X11" }
         files { glfw .. "/src/x11_*.*", glfw .. "/src/xkb_*.*", glfw .. "/src/glx_context.c", glfw .. "/src/linux_*.*", glfw .. "/src/posix_*.*" }
-    filter "configurations:Debug or DebugLivePP"
+    filter "configurations:Debug*"
         runtime "Debug"
         symbols "On"
-    filter { "configurations:Release or Profile" }
+    filter { "configurations:Release* or Profile*" }
         runtime "Release"
         optimize "Speed"
     filter {}
@@ -101,19 +101,19 @@ project "Velos"
         defines { "VL_PLATFORM_LINUX" }
         removefiles { velos .. "/velos/rhi/d3d12/**" }
         links { "vulkan", "dl", "pthread", "X11", "Xrandr", "Xi", "Xxf86vm", "Xinerama", "Xcursor", "shaderc" }
-    filter "configurations:Debug or DebugLivePP"
+    filter "configurations:Debug*"
         runtime "Debug"
         symbols "On"
         defines { "VL_DEBUG" }
-    filter { "system:windows", "configurations:Debug or DebugLivePP" }
+    filter { "system:windows", "configurations:Debug*" }
         links { "shaderc_combinedd" }
-    filter "configurations:Release"
+    filter "configurations:Release*"
         runtime "Release"
         optimize "Speed"
         defines { "VL_RELEASE" }
-    filter { "system:windows", "configurations:Release or Profile" }
+    filter { "system:windows", "configurations:Release* or Profile*" }
         links { "shaderc_combined" }
-    filter "configurations:Profile"
+    filter "configurations:Profile*"
         runtime "Release"
         optimize "Speed"
         symbols "On"

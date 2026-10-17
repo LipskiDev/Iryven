@@ -2,10 +2,6 @@
 
 namespace Iryven {
 
-enum class LightType {
-    Directional,
-    Point,
-    Spot
-};
+enum class LightType { Directional, Point, Spot };
 
-} // namespace Iryven
+}  // namespace Iryven

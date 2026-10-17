@@ -2,7 +2,6 @@
 
 namespace Iryven {
 
-class ParticleIndirectArgsPass {
-};
+class ParticleIndirectArgsPass {};
 
-} // namespace Iryven
+}  // namespace Iryven

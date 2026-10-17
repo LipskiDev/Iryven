@@ -2,7 +2,6 @@
 
 namespace Iryven {
 
-class ParticleRenderPass {
-};
+class ParticleRenderPass {};
 
-} // namespace Iryven
+}  // namespace Iryven
