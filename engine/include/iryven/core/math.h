@@ -2,7 +2,8 @@
 
 namespace Iryven::Tween {
 
-// Interpolate from min to max using normalized time t. Time is clamped to [0, 1].
+// Interpolate from min to max using normalized time t. Time is clamped to [0,
+// 1].
 [[nodiscard]] float Linear(float min, float max, float t);
 
 [[nodiscard]] float EaseInSine(float min, float max, float t);
@@ -39,18 +40,23 @@ namespace Iryven::Tween {
 // overshoot controls how far the curve travels beyond its endpoint.
 [[nodiscard]] float EaseInBack(float min, float max, float t, float overshoot);
 [[nodiscard]] float EaseOutBack(float min, float max, float t, float overshoot);
-[[nodiscard]] float EaseInOutBack(float min, float max, float t, float overshoot);
+[[nodiscard]] float EaseInOutBack(float min, float max, float t,
+                                  float overshoot);
 
 [[nodiscard]] float EaseInElastic(float min, float max, float t);
 [[nodiscard]] float EaseOutElastic(float min, float max, float t);
 [[nodiscard]] float EaseInOutElastic(float min, float max, float t);
-// amplitude controls the overshoot strength; oscillations controls the wave count.
-[[nodiscard]] float EaseInElastic(float min, float max, float t, float amplitude, float oscillations);
-[[nodiscard]] float EaseOutElastic(float min, float max, float t, float amplitude, float oscillations);
-[[nodiscard]] float EaseInOutElastic(float min, float max, float t, float amplitude, float oscillations);
+// amplitude controls the overshoot strength; oscillations controls the wave
+// count.
+[[nodiscard]] float EaseInElastic(float min, float max, float t,
+                                  float amplitude, float oscillations);
+[[nodiscard]] float EaseOutElastic(float min, float max, float t,
+                                   float amplitude, float oscillations);
+[[nodiscard]] float EaseInOutElastic(float min, float max, float t,
+                                     float amplitude, float oscillations);
 
 [[nodiscard]] float EaseInBounce(float min, float max, float t);
 [[nodiscard]] float EaseOutBounce(float min, float max, float t);
 [[nodiscard]] float EaseInOutBounce(float min, float max, float t);
 
-} // namespace Iryven::Tween
+}  // namespace Iryven::Tween

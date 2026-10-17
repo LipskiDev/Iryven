@@ -13,35 +13,37 @@
 namespace Iryven {
 
 struct MeshRenderer {
-    MeshRenderer() = default;
+  MeshRenderer() = default;
 
-    explicit MeshRenderer(std::shared_ptr<const MeshData> mesh, MaterialHandle material = {})
-        : mesh(std::move(mesh)), material(std::move(material)) {
-        if (!this->mesh) throw std::invalid_argument("MeshRenderer requires mesh data");
-    }
+  explicit MeshRenderer(std::shared_ptr<const MeshData> mesh,
+                        MaterialHandle material = {})
+      : mesh(std::move(mesh)), material(std::move(material)) {
+    if (!this->mesh)
+      throw std::invalid_argument("MeshRenderer requires mesh data");
+  }
 
-    explicit MeshRenderer(ModelHandle model, MaterialHandle material = {})
-        : model(std::move(model)), material(std::move(material)) {
-        if (!this->model || !this->model->IsValid())
-            throw std::invalid_argument("MeshRenderer requires valid model data");
-    }
+  explicit MeshRenderer(ModelHandle model, MaterialHandle material = {})
+      : model(std::move(model)), material(std::move(material)) {
+    if (!this->model || !this->model->IsValid())
+      throw std::invalid_argument("MeshRenderer requires valid model data");
+  }
 
-    explicit MeshRenderer(AssetHandle modelAsset, MaterialHandle material = {})
-        : modelAsset(modelAsset), material(std::move(material)) {
-        if (!modelAsset) throw std::invalid_argument("MeshRenderer requires a valid model asset handle");
-    }
+  explicit MeshRenderer(AssetHandle modelAsset, MaterialHandle material = {})
+      : modelAsset(modelAsset), material(std::move(material)) {
+    if (!modelAsset)
+      throw std::invalid_argument(
+          "MeshRenderer requires a valid model asset handle");
+  }
 
-    MeshRenderer(std::vector<Vertex> vertices, std::vector<std::uint32_t> indices)
-        : mesh(std::make_shared<const MeshData>(MeshData{
-            .vertices = std::move(vertices),
-            .indices = std::move(indices)
-        })) {}
+  MeshRenderer(std::vector<Vertex> vertices, std::vector<std::uint32_t> indices)
+      : mesh(std::make_shared<const MeshData>(MeshData{
+            .vertices = std::move(vertices), .indices = std::move(indices)})) {}
 
-    std::shared_ptr<const MeshData> mesh;
-    ModelHandle model;
-    AssetHandle modelAsset;
-    MaterialHandle material;
-    bool hidden = false;
+  std::shared_ptr<const MeshData> mesh;
+  ModelHandle model;
+  AssetHandle modelAsset;
+  MaterialHandle material;
+  bool hidden = false;
 };
 
-}
+}  // namespace Iryven

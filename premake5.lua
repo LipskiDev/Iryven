@@ -1,6 +1,8 @@
 local livePPPath = "external/LivePP"
 local hasLivePP = os.isdir(livePPPath)
 local workspaceConfigurations = { "Debug", "Release", "Profile" }
+include "premake/backends.lua"
+include "premake/shaders.lua"
 
 if hasLivePP then
     table.insert(workspaceConfigurations, "DebugLivePP")
@@ -12,8 +14,8 @@ end
 workspace "Iryven"
     architecture "x86_64"
     startproject "Sandbox"
-    configurations (workspaceConfigurations)
     multiprocessorcompile "On"
+    configureGraphicsBackends(workspaceConfigurations)
 
 outputdir = "%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}"
 
@@ -38,9 +40,14 @@ IryvenPublicDefines = {
 
 local vulkanSdk = os.getenv("VULKAN_SDK")
 if not vulkanSdk then
-    error("VULKAN_SDK must be set so Premake can locate glslc for shader compilation")
+    error("VULKAN_SDK must be set so Premake can locate DXC for HLSL compilation")
 end
-local glslc = path.join(vulkanSdk, "Bin", "glslc.exe")
+
+
+local dxcRuntimeCopyCommands = {
+    '{COPYFILE} "' .. path.join(vulkanSdk, 'Bin', 'dxcompiler.dll') .. '" "%{cfg.targetdir}"',
+    '{COPYFILE} "$(WindowsSdkDir)bin\\$(TargetPlatformVersion)\\x64\\dxil.dll" "%{cfg.targetdir}"'
+}
 
 include "premake/velos.lua"
 include "premake/spdlog.lua"
@@ -70,13 +77,7 @@ project "Iryven"
         "external/velos/external/imgui/imgui_widgets.cpp",
         "external/velos/external/imgui/backends/imgui_impl_glfw.cpp",
         "external/velos/external/imgui/backends/imgui_impl_vulkan.cpp",
-        "assets/shaders/internal/**.vert",
-        "assets/shaders/internal/**.frag",
-        "assets/shaders/internal/**.comp",
-        "assets/shaders/internal/**.hlsl",
-        "assets/shaders/internal/**.glsl",
-        "assets/shaders/internal/**.mesh",
-        "assets/shaders/internal/**.task"
+        "assets/shaders/internal/**.hlsl"
     }
     includedirs (IryvenPublicIncludeDirs)
     includedirs {
@@ -93,55 +94,35 @@ project "Iryven"
     defines { "GLFW_INCLUDE_NONE", "IMGUI_IMPL_VULKAN_NO_PROTOTYPES" }
     links { "Velos", "spdlog", "Flecs", "Box3D", "MSDFAtlasGen", "fastgltf", "enkiTS", "meshoptimizer", "miniaudio" }
 
-    -- Compile GLSL to SPIR-V at build time. Runtime shader loading still
-    -- performs reflection, but no longer invokes the GLSL compiler.
-    filter "files:assets/shaders/internal/**.vert"
-        buildmessage "Compiling %{file.name} to SPIR-V"
-        buildcommands { '"' .. glslc .. '" -O --target-env=vulkan1.3 -fshader-stage=vert -o "%{file.abspath}.spv" "%{file.abspath}"' }
-        buildoutputs { "%{file.abspath}.spv" }
-    filter "files:assets/shaders/internal/**.frag"
-        buildinputs { "assets/shaders/internal/gltf_material.glsl", "assets/shaders/internal/lighting.glsl", "assets/shaders/internal/frame_uniform.glsl", "assets/shaders/internal/light_buffer.glsl", "assets/shaders/internal/light_tiles.glsl", "assets/shaders/internal/light_depth_bins.glsl", "assets/shaders/internal/shadow_common.glsl", "assets/shaders/internal/shadow_sampling.glsl" }
-        buildmessage "Compiling %{file.name} to SPIR-V"
-        buildcommands { '"' .. glslc .. '" -O --target-env=vulkan1.3 -fshader-stage=frag -o "%{file.abspath}.spv" "%{file.abspath}"' }
-        buildoutputs { "%{file.abspath}.spv" }
-    filter "files:assets/shaders/internal/**.comp"
-        buildinputs { "assets/shaders/internal/light_buffer.glsl", "assets/shaders/internal/light_tiles.glsl", "assets/shaders/internal/light_depth_bins.glsl", "assets/shaders/internal/shadow_common.glsl" }
-        buildmessage "Compiling %{file.name} to SPIR-V"
-        buildcommands { '"' .. glslc .. '" -O --target-env=vulkan1.3 -fshader-stage=comp -o "%{file.abspath}.spv" "%{file.abspath}"' }
-        buildoutputs { "%{file.abspath}.spv" }
-    filter "files:assets/shaders/internal/**.mesh"
-        buildinputs { "assets/shaders/internal/shadow_common.glsl" }
-        buildmessage "Compiling %{file.name} to SPIR-V"
-        buildcommands { '"' .. glslc .. '" -O --target-env=vulkan1.3 -fshader-stage=mesh -o "%{file.abspath}.spv" "%{file.abspath}"' }
-        buildoutputs { "%{file.abspath}.spv" }
-    filter "files:assets/shaders/internal/**.task"
-        buildinputs { "assets/shaders/internal/shadow_common.glsl" }
-        buildmessage "Compiling %{file.name} to SPIR-V"
-        buildcommands { '"' .. glslc .. '" -O --target-env=vulkan1.3 -fshader-stage=task -o "%{file.abspath}.spv" "%{file.abspath}"' }
-        buildoutputs { "%{file.abspath}.spv" }
-
     filter "files:**.hlsl"
-        excludefrombuild "On"
+        buildaction "None"
+    filter {}
+    configureEngineShaders(vulkanSdk)
 
     filter "system:windows"
         systemversion "latest"
         buildoptions { "/utf-8" }
         defines { "IRYVEN_PLATFORM_WINDOWS" }
+        files {
+            "external/velos/external/imgui/backends/imgui_impl_win32.cpp",
+            "external/velos/external/imgui/backends/imgui_impl_dx12.cpp"
+        }
+        links { "d3d12", "dxgi", "dxguid", "d3dcompiler", "dwmapi", "imm32" }
     filter "system:linux"
         pic "On"
         defines { "IRYVEN_PLATFORM_LINUX" }
-    filter "configurations:Debug or DebugLivePP"
+    filter "configurations:Debug*"
         runtime "Debug"
         symbols "On"
         defines { "IRYVEN_DEBUG" }
-    filter { "system:windows", "configurations:DebugLivePP" }
+    filter { "system:windows", "configurations:DebugLivePP*" }
         debugformat "C7"
         buildoptions { "/Gm-", "/Gy", "/Gw" }
-    filter "configurations:Release"
+    filter "configurations:Release*"
         runtime "Release"
         optimize "Speed"
         defines { "IRYVEN_RELEASE" }
-    filter "configurations:Profile"
+    filter "configurations:Profile*"
         runtime "Release"
         optimize "Speed"
         symbols "On"
@@ -152,31 +133,39 @@ project "Sandbox"
     location "build/Sandbox"
     kind "ConsoleApp"
     language "C++"
-    cppdialect "C++20"
+    cppdialect "C++23"
     staticruntime "off"
     targetdir ("bin/" .. outputdir .. "/%{prj.name}")
     objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
     debugdir (_WORKING_DIR)
-    files { "sandbox/**.h", "sandbox/**.cpp" }
-    includedirs (IryvenPublicIncludeDirs)
-    includedirs { "external/velos/external/imgui" }
-    defines (IryvenPublicDefines)
-    links { "Iryven" }
+    files { "sandbox/main.cpp", "sandbox/**.h", "sandbox/**.hlsl" }
+    filter "files:sandbox/**.hlsl"
+        buildaction "None"
+    filter {}
+    includedirs {
+        "engine/include",
+        "external/glfw/include",
+        "external/velos/velos",
+        "external/velos/velos/core",
+        "external/velos/external/glm",
+        "external/velos/external/SPIRV-Reflect"
+    }
+    links { "Velos" }
 
     filter "system:windows"
         systemversion "latest"
         buildoptions { "/utf-8" }
+        links { "d3d12", "dxgi", "dxguid", "user32" }
+        postbuildcommands (dxcRuntimeCopyCommands)
 
-    filter "configurations:Debug or DebugLivePP"
+    filter "configurations:Debug*"
         runtime "Debug"
         symbols "On"
-    filter { "system:windows", "configurations:DebugLivePP" }
+    filter { "system:windows", "configurations:DebugLivePP*" }
         debugformat "C7"
-        defines { "IRYVEN_WITH_LIVEPP" }
-        includedirs { "external" }
         buildoptions { "/Gm-", "/Gy", "/Gw" }
         linkoptions { "/FUNCTIONPADMIN", "/OPT:NOREF", "/OPT:NOICF", "/DEBUG:FULL" }
-    filter { "configurations:Release or Profile" }
+    filter { "configurations:Release* or Profile*" }
         runtime "Release"
         optimize "Speed"
     filter {}
@@ -199,13 +188,14 @@ project "Editor"
     filter "system:windows"
         systemversion "latest"
         buildoptions { "/utf-8" }
-    filter "configurations:Debug or DebugLivePP"
+        postbuildcommands (dxcRuntimeCopyCommands)
+    filter "configurations:Debug*"
         runtime "Debug"
         symbols "On"
-    filter { "configurations:Release or Profile" }
+    filter { "configurations:Release* or Profile*" }
         runtime "Release"
         optimize "Speed"
-    filter "configurations:Profile"
+    filter "configurations:Profile*"
 
         symbols "On"
     filter {}
@@ -219,16 +209,125 @@ project "IryvenTests"
     targetdir ("bin/" .. outputdir .. "/%{prj.name}")
     objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
     files { "tests/**.cpp" }
+    removefiles { "tests/platform/win32_window_tests.cpp" }
+    removefiles { "tests/platform/shader_port_tests.cpp" }
+    removefiles { "tests/platform/imgui_backend_tests.cpp" }
     includedirs (IryvenPublicIncludeDirs)
     defines (IryvenPublicDefines)
     links { "Iryven" }
     filter "system:windows"
         systemversion "latest"
         buildoptions { "/utf-8" }
-    filter "configurations:Debug or DebugLivePP"
+        postbuildcommands (dxcRuntimeCopyCommands)
+    filter "configurations:Debug*"
         runtime "Debug"
         symbols "On"
-    filter { "configurations:Release or Profile" }
+    filter { "configurations:Release* or Profile*" }
         runtime "Release"
         optimize "Speed"
     filter {}
+
+if os.host() == "windows" then
+project "ImGuiBackendTests"
+    location "build/ImGuiBackendTests"
+    kind "ConsoleApp"
+    language "C++"
+    cppdialect "C++20"
+    staticruntime "off"
+    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
+    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+    debugdir (_WORKING_DIR)
+    files { "tests/platform/imgui_backend_tests.cpp" }
+    includedirs (IryvenPublicIncludeDirs)
+    includedirs { "engine/src", "external/velos/external/imgui", "external/velos/velos/core" }
+    defines (IryvenPublicDefines)
+    links { "Iryven" }
+    filter "system:windows"
+        systemversion "latest"
+        buildoptions { "/utf-8" }
+        postbuildcommands (dxcRuntimeCopyCommands)
+    filter "configurations:Debug*"
+        runtime "Debug"
+        symbols "On"
+    filter "configurations:Release* or Profile*"
+        runtime "Release"
+        optimize "Speed"
+    filter {}
+
+project "ShaderPortTests"
+    location "build/ShaderPortTests"
+    kind "ConsoleApp"
+    language "C++"
+    cppdialect "C++23"
+    staticruntime "off"
+    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
+    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+    debugdir (_WORKING_DIR)
+    files { "tests/platform/shader_port_tests.cpp" }
+    includedirs (IryvenPublicIncludeDirs)
+    links { "Velos" }
+    filter "system:windows"
+        systemversion "latest"
+        links { "d3d12", "dxgi", "dxguid", "user32" }
+        postbuildcommands (dxcRuntimeCopyCommands)
+    filter "configurations:Debug*"
+        runtime "Debug"
+        symbols "On"
+    filter "configurations:Release* or Profile*"
+        runtime "Release"
+        optimize "Speed"
+    filter {}
+
+project "Win32WindowTests"
+    location "build/Win32WindowTests"
+    kind "ConsoleApp"
+    language "C++"
+    cppdialect "C++20"
+    staticruntime "off"
+    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
+    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+    files { "tests/platform/win32_window_tests.cpp", "engine/src/platform/win32/**.cpp",
+        "engine/src/platform/window.cpp", "engine/src/platform/glfw/**.cpp", "engine/src/core/log.cpp" }
+    includedirs (IryvenPublicIncludeDirs)
+    includedirs { "engine/src", "external/glfw/include" }
+    defines (IryvenPublicDefines)
+    defines { "GLFW_INCLUDE_NONE" }
+    links { "GLFW", "spdlog", "user32" }
+    filter "system:windows"
+        systemversion "latest"
+        buildoptions { "/utf-8" }
+    filter "configurations:Debug*"
+        runtime "Debug"
+        symbols "On"
+    filter "configurations:Release* or Profile*"
+        runtime "Release"
+        optimize "Speed"
+    filter {}
+
+project "D3D12ParityTests"
+    location "build/D3D12ParityTests"
+    kind "ConsoleApp"
+    language "C++"
+    cppdialect "C++23"
+    staticruntime "off"
+    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
+    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+    debugdir (_WORKING_DIR)
+    files { "external/velos/tests/d3d12/**.cpp", "external/velos/tests/d3d12/**.hlsl" }
+    includedirs { "external/velos/velos", "external/velos/velos/core", "external/velos/external/glm", "external/velos/external/SPIRV-Reflect" }
+    links { "Velos" }
+    filter "files:**.hlsl"
+        buildaction "None"
+    filter "system:windows"
+        systemversion "latest"
+        defines { "VL_PLATFORM_WINDOWS", "VL_HAS_D3D12" }
+        links { "d3d12", "dxgi", "dxguid", "user32" }
+        postbuildcommands (dxcRuntimeCopyCommands)
+    filter "configurations:Debug*"
+        runtime "Debug"
+        symbols "On"
+    filter "configurations:Release* or Profile*"
+        runtime "Release"
+        optimize "Speed"
+    filter {}
+end

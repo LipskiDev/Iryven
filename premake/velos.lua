@@ -3,6 +3,9 @@ local velos = path.join(root, "external/velos")
 local glfw = path.join(root, "external/glfw")
 local VulkanSDK = os.getenv("VULKAN_SDK")
 
+-- Runtime HLSL compilation uses the DXC import library from the Windows SDK.
+-- Executable projects copy dxcompiler.dll and dxil.dll beside their binaries.
+
 project "SPIRVReflect"
     location (path.join(root, "build/SPIRVReflect"))
     kind "StaticLib"
@@ -12,10 +15,10 @@ project "SPIRVReflect"
     objdir (path.join(root, "bin-int/" .. outputdir .. "/%{prj.name}"))
     files { velos .. "/external/SPIRV-Reflect/spirv_reflect.h", velos .. "/external/SPIRV-Reflect/spirv_reflect.c" }
     includedirs { velos .. "/external/SPIRV-Reflect" }
-    filter "configurations:Debug or DebugLivePP"
+    filter "configurations:Debug*"
         runtime "Debug"
         symbols "On"
-    filter { "configurations:Release or Profile" }
+    filter { "configurations:Release* or Profile*" }
         runtime "Release"
         optimize "Speed"
     filter {}
@@ -50,10 +53,10 @@ project "GLFW"
         pic "On"
         defines { "_GLFW_X11" }
         files { glfw .. "/src/x11_*.*", glfw .. "/src/xkb_*.*", glfw .. "/src/glx_context.c", glfw .. "/src/linux_*.*", glfw .. "/src/posix_*.*" }
-    filter "configurations:Debug or DebugLivePP"
+    filter "configurations:Debug*"
         runtime "Debug"
         symbols "On"
-    filter { "configurations:Release or Profile" }
+    filter { "configurations:Release* or Profile*" }
         runtime "Release"
         optimize "Speed"
     filter {}
@@ -73,30 +76,44 @@ project "Velos"
         velos .. "/external/stb", velos .. "/external/SPIRV-Reflect", velos .. "/external/tracy/public"
     }
     links { "GLFW", "SPIRVReflect" }
-    defines { "_CRT_SECURE_NO_WARNINGS", "GLFW_INCLUDE_NONE" }
+    defines { "_CRT_SECURE_NO_WARNINGS", "GLFW_INCLUDE_NONE", "VK_NO_PROTOTYPES" }
     filter "system:windows"
+        -- D3D12 headers and import libraries are supplied by the Windows SDK.
+        -- Keep the backend Windows-only so non-Windows builds never parse the
+        -- platform headers or attempt to compile its sources.
         systemversion "latest"
-        defines { "VL_PLATFORM_WINDOWS" }
+        defines { "VL_PLATFORM_WINDOWS", "VL_HAS_D3D12" }
         includedirs { (VulkanSDK or "") .. "/Include" }
         libdirs { (VulkanSDK or "") .. "/Lib" }
-        links { "vulkan-1", "user32", "gdi32", "shell32", "ole32" }
+        links {
+            "vulkan-1",
+            "d3d12",
+            "dxgi",
+            "dxguid",
+            "dxcompiler",
+            "user32",
+            "gdi32",
+            "shell32",
+            "ole32"
+        }
     filter "system:linux"
         pic "On"
         defines { "VL_PLATFORM_LINUX" }
+        removefiles { velos .. "/velos/rhi/d3d12/**" }
         links { "vulkan", "dl", "pthread", "X11", "Xrandr", "Xi", "Xxf86vm", "Xinerama", "Xcursor", "shaderc" }
-    filter "configurations:Debug or DebugLivePP"
+    filter "configurations:Debug*"
         runtime "Debug"
         symbols "On"
         defines { "VL_DEBUG" }
-    filter { "system:windows", "configurations:Debug or DebugLivePP" }
+    filter { "system:windows", "configurations:Debug*" }
         links { "shaderc_combinedd" }
-    filter "configurations:Release"
+    filter "configurations:Release*"
         runtime "Release"
         optimize "Speed"
         defines { "VL_RELEASE" }
-    filter { "system:windows", "configurations:Release or Profile" }
+    filter { "system:windows", "configurations:Release* or Profile*" }
         links { "shaderc_combined" }
-    filter "configurations:Profile"
+    filter "configurations:Profile*"
         runtime "Release"
         optimize "Speed"
         symbols "On"

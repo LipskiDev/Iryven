@@ -5,8 +5,8 @@
 namespace Iryven {
 
 class DebugLayer final : public Layer {
-public:
-    DebugLayer() : Layer("Debug") {}
+ public:
+  DebugLayer() : Layer("Debug") {}
 };
 
-} // namespace Iryven
+}  // namespace Iryven

@@ -4,4 +4,4 @@ namespace Iryven {
 
 struct AssetTag {};
 
-} // namespace Iryven
+}  // namespace Iryven

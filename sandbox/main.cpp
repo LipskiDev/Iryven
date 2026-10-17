@@ -1,377 +1,522 @@
-#include <iryven/iryven.h>
+#include <rhi/device.h>
+#include <rhi/command_list.h>
+#include <rhi/resources.h>
+#include <rhi/types.h>
+#include <shader/shader_compiler.h>
+#include <iryven/graphics_backend.h>
 
-#include "development/development_session.h"
-
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <cstdio>
-#include <filesystem>
 #include <exception>
 #include <iostream>
 #include <memory>
-#include <string>
-
+#include <stdexcept>
+#include <cstring>
+#include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
-#include <imgui.h>
+#include "duck_model.h"
 
-#include <miniaudio.h>
+#if defined(_WIN32)
+
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <Windows.h>
+#define GLFW_INCLUDE_NONE
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3.h>
+#include <GLFW/glfw3native.h>
 
 namespace {
 
-	struct CameraMotion {
-		glm::vec3 velocity{ 0.0f };
-		glm::vec2 lookVelocity{ 0.0f }; // Pitch and yaw in radians per second.
-	};
+using namespace Velos;
+using namespace Velos::RHI;
 
-	struct PlayerTag {
-		bool enabled = true;
-	};
+struct DeviceDeleter {
+  void operator()(IDevice *device) const noexcept {
+    if (device) {
+      DestroyDevice(device);
+    }
+  }
+};
 
-	struct Collectible {
-		bool collected = false;
-	};
+using DevicePtr = std::unique_ptr<IDevice, DeviceDeleter>;
 
-	class FpsOverlay final : public Iryven::Layer {
-	public:
-		explicit FpsOverlay(Iryven::Engine& engine)
-			: Layer("CPU Timing Overlay"), engine_(engine) {}
+class SandboxWindow final {
+ public:
+  SandboxWindow(const char *title, int width, int height) {
+    if (!glfwInit())
+      throw std::runtime_error("Failed to initialize GLFW");
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    handle_ = glfwCreateWindow(width, height, title, nullptr, nullptr);
+    if (!handle_) {
+      glfwTerminate();
+      throw std::runtime_error("Failed to create the Sandbox window");
+    }
+  }
+  ~SandboxWindow() {
+    glfwDestroyWindow(handle_);
+    glfwTerminate();
+  }
+  SandboxWindow(const SandboxWindow &) = delete;
+  SandboxWindow &operator=(const SandboxWindow &) = delete;
+  bool ProcessMessages() {
+    glfwPollEvents();
+    return !glfwWindowShouldClose(handle_);
+  }
+  WindowHandle GetHandle(GraphicsAPI api) const {
+    if (api == GraphicsAPI::Vulkan)
+      return {WindowHandleType::GLFW, handle_};
+    return {WindowHandleType::Win32, glfwGetWin32Window(handle_)};
+  }
+  Extent2D GetClientExtent() const {
+    int width = 0, height = 0;
+    glfwGetFramebufferSize(handle_, &width, &height);
+    return {static_cast<u32>(width), static_cast<u32>(height)};
+  }
 
-		void OnImGuiRender() override
-		{
-			ImGui::Begin("Lighting debug");
-			if (ImGui::Checkbox("Lights affecting pixel (opaque)", &lightCountView_)) {
-				if (lightCountView_) shadowTierView_ = false;
-				engine_.SetLightCountView(lightCountView_);
-				engine_.SetShadowTierView(shadowTierView_);
-			}
-			if (ImGui::Checkbox("Point shadow resolution", &shadowTierView_)) {
-				if (shadowTierView_) lightCountView_ = false;
-				engine_.SetLightCountView(lightCountView_);
-				engine_.SetShadowTierView(shadowTierView_);
-			}
-			if (lightCountView_) {
-				ImGui::TextUnformatted("Positive light energy, in range/cone, facing surface.");
-				const ImVec4 colors[]{{0,0,0,1},{0,0,1,1},{0,1,1,1},{0,1,0,1},{1,1,0,1},{1,0,0,1},{1,0,1,1}};
-				const char* labels[]{"0", "1-4", "5-8", "9-16", "17-32", "33-64", "65+"};
-				for (int i=0; i<7; ++i) {
-					ImGui::PushID(i);
-					ImGui::ColorButton("##band", colors[i], ImGuiColorEditFlags_NoTooltip, ImVec2(18,18));
-					ImGui::SameLine(); ImGui::TextUnformatted(labels[i]); ImGui::PopID();
-				}
-				ImGui::TextUnformatted("Diagnostic mode skips BRDF work; timings are not representative.");
-			}
-			if (shadowTierView_) {
-				const ImVec4 colors[]{
-					{1.0f, 0.2f, 0.15f, 1.0f},
-					{1.0f, 0.8f, 0.1f, 1.0f},
-					{0.15f, 0.45f, 1.0f, 1.0f},
-					{0.65f, 0.25f, 1.0f, 1.0f},
-					{0.0f, 0.0f, 0.0f, 1.0f},
-				};
-				const char* labels[]{
-					"High / 1024", "Medium / 512", "Low / 256",
-					"Very low / 128",
-					"No shadowed point light",
-				};
-				for (int i = 0; i < 5; ++i) {
-					ImGui::PushID(100 + i);
-					ImGui::ColorButton("##tier", colors[i],
-						ImGuiColorEditFlags_NoTooltip, ImVec2(18, 18));
-					ImGui::SameLine();
-					ImGui::TextUnformatted(labels[i]);
-					ImGui::PopID();
-				}
-			}
-			ImGui::End();
-			const ImGuiIO& io = ImGui::GetIO();
-			const Iryven::CpuFrameTimings& sample = engine_.GetCpuFrameTimings();
-			if (!initialized_ && sample.frameMs > 0.0f) {
-				timings_ = sample;
-				initialized_ = true;
-			} else if (initialized_) {
-				constexpr float smoothing = 0.12f;
-				const auto smooth = [](float& value, float next) {
-					value += (next - value) * smoothing;
-				};
-				smooth(timings_.frameMs, sample.frameMs);
-				smooth(timings_.eventsMs, sample.eventsMs);
-				smooth(timings_.updateMs, sample.updateMs);
-				smooth(timings_.beginFrameMs, sample.beginFrameMs);
-				smooth(timings_.frameFenceWaitMs, sample.frameFenceWaitMs);
-				smooth(timings_.acquireImageMs, sample.acquireImageMs);
-				smooth(timings_.uiBuildMs, sample.uiBuildMs);
-				smooth(timings_.assetResolveMs, sample.assetResolveMs);
-				smooth(timings_.sceneRenderMs, sample.sceneRenderMs);
-				smooth(timings_.sceneExtractionMs, sample.sceneExtractionMs);
-				smooth(timings_.frameGraphMs, sample.frameGraphMs);
-				smooth(timings_.frameGraphSchedulingMs, sample.frameGraphSchedulingMs);
-				smooth(timings_.commandAcquireMs, sample.commandAcquireMs);
-				smooth(timings_.commandBeginMs, sample.commandBeginMs);
-				smooth(timings_.resourceSetupMs, sample.resourceSetupMs);
-				smooth(timings_.preRenderMs, sample.preRenderMs);
-				smooth(timings_.uploadLightsMs, sample.uploadLightsMs);
-				smooth(timings_.uploadMaterialsMs, sample.uploadMaterialsMs);
-				smooth(timings_.uploadFrameDataMs, sample.uploadFrameDataMs);
-				smooth(timings_.renderingSetupMs, sample.renderingSetupMs);
-				smooth(timings_.drawRecordMs, sample.drawRecordMs);
-				smooth(timings_.commandEndMs, sample.commandEndMs);
-				smooth(timings_.queueSubmitMs, sample.queueSubmitMs);
-				smooth(timings_.uiDrawMs, sample.uiDrawMs);
-				smooth(timings_.presentMs, sample.presentMs);
-			}
+ private:
+  GLFWwindow *handle_ = nullptr;
+};
+class Sandbox final {
+ public:
+  Sandbox()
+      : window_(Iryven::GetBuildGraphicsBackend() == GraphicsAPI::D3D12
+                    ? "Velos Sandbox - DX12"
+                    : "Velos Sandbox - Vulkan",
+                1920, 1080),
+        device_(CreateDevice({
+            .graphicsAPI = Iryven::GetBuildGraphicsBackend(),
+            .enableValidation = true,
+            .applicationName = "Velos Sandbox",
+        })) {
+    if (!device_) {
+      throw std::runtime_error("Failed to create the Velos device");
+    }
 
-			std::array<std::array<char, 128>, 9> lines{};
-			std::snprintf(lines[0].data(), lines[0].size(), "%.0f FPS | CPU %.2f ms",
-				io.Framerate, timings_.frameMs);
-			std::snprintf(lines[1].data(), lines[1].size(), "Events %.2f | Update %.2f ms",
-				timings_.eventsMs, timings_.updateMs);
-			std::snprintf(lines[2].data(), lines[2].size(),
-				"Begin %.2f | Fence %.2f | Acquire %.2f ms",
-				timings_.beginFrameMs, timings_.frameFenceWaitMs,
-				timings_.acquireImageMs);
-			std::snprintf(lines[3].data(), lines[3].size(),
-				"Scene %.2f | Extract %.2f | FrameGraph %.2f ms",
-				timings_.sceneRenderMs, timings_.sceneExtractionMs,
-				timings_.frameGraphMs);
-			std::snprintf(lines[4].data(), lines[4].size(),
-				"FG schedule %.2f | AcquireCmd %.2f | BeginCmd %.2f ms",
-				timings_.frameGraphSchedulingMs, timings_.commandAcquireMs,
-				timings_.commandBeginMs);
-			std::snprintf(lines[5].data(), lines[5].size(),
-				"Resources %.2f | PreRender %.2f ms",
-				timings_.resourceSetupMs, timings_.preRenderMs);
-			std::snprintf(lines[6].data(), lines[6].size(),
-				"Uploads: lights %.2f | materials %.2f | frame %.2f ms",
-				timings_.uploadLightsMs, timings_.uploadMaterialsMs,
-				timings_.uploadFrameDataMs);
-			std::snprintf(lines[7].data(), lines[7].size(),
-				"RenderSetup %.2f | Draws %.2f | EndCmd %.2f | Submit %.2f ms",
-				timings_.renderingSetupMs, timings_.drawRecordMs,
-				timings_.commandEndMs, timings_.queueSubmitMs);
-			std::snprintf(lines[8].data(), lines[8].size(),
-				"UI %.2f | Assets %.2f | Present %.2f ms",
-				timings_.uiBuildMs + timings_.uiDrawMs,
-				timings_.assetResolveMs, timings_.presentMs);
+    const Extent2D extent = window_.GetClientExtent();
+    if (extent.width == 0 || extent.height == 0) {
+      throw std::runtime_error(
+          "Cannot create a swapchain for a zero-sized window");
+    }
 
-			constexpr float margin = 8.0f;
-			constexpr float padding = 5.0f;
-			constexpr float lineSpacing = 2.0f;
-			float width = 0.0f;
-			for (const auto& line : lines) {
-				width = std::max(width, ImGui::CalcTextSize(line.data()).x);
-			}
-			const float lineHeight = ImGui::GetTextLineHeight();
-			const float height = lineHeight * static_cast<float>(lines.size())
-				+ lineSpacing * static_cast<float>(lines.size() - 1);
-			const ImVec2 textPosition{
-				io.DisplaySize.x - margin - width,
-				margin
-			};
-			ImDrawList* drawList = ImGui::GetForegroundDrawList();
-			drawList->AddRectFilled(
-				{textPosition.x - padding, textPosition.y - padding},
-				{textPosition.x + width + padding, textPosition.y + height + padding},
-				IM_COL32(0, 0, 0, 150), 3.0f);
-			for (std::size_t index = 0; index < lines.size(); ++index) {
-				drawList->AddText(
-					{textPosition.x,
-					 textPosition.y + static_cast<float>(index) * (lineHeight + lineSpacing)},
-					IM_COL32(235, 235, 235, 255), lines[index].data());
-			}
-		}
+    framebufferWidth_ = extent.width;
+    framebufferHeight_ = extent.height;
+    swapchain_ = device_->CreateSwapchain({
+        .window = window_.GetHandle(device_->GetBackend()),
+        .width = framebufferWidth_,
+        .height = framebufferHeight_,
+        .format = Format::BGRA8_UNORM,
+        .bufferCount = 2,
+        .vsync = true,
+        .debugName = "Velos Sandbox swapchain",
+    });
 
-	private:
-		Iryven::Engine& engine_;
-		bool lightCountView_ = false;
-		bool shadowTierView_ = false;
-		Iryven::CpuFrameTimings timings_{};
-		bool initialized_ = false;
-	};
+    if (!swapchain_.IsValid()) {
+      throw std::runtime_error("Failed to create the Velos D3D12 swapchain");
+    }
+    CompileShaders();
+    CreatePipeline();
+    CreateDepthResources();
+    CreateResources();
+  }
 
-	Iryven::MaterialHandle MakeMaterial(std::string name, Iryven::Color color, float roughness = 0.0f, float metallic = 0.0f)
-	{
-		auto material = std::make_shared<Iryven::Material>();
-		material->name = std::move(name);
-		material->baseColor = color;
-		material->roughness = roughness;
-		material->metallic = metallic;
-		return material;
-	}
+  ~Sandbox() {
+    if (!device_) {
+      return;
+    }
 
-	void AddBox(
-		Iryven::World& world,
-		const std::shared_ptr<const Iryven::MeshData>& mesh,
-		const Iryven::MaterialHandle& material,
-		std::string name,
-		glm::vec3 position,
-		glm::vec3 size)
-	{
-		auto entity = world.CreateEntity(name);
-		entity.Add<Iryven::Transform>(Iryven::Transform{
-			.position = position,
-			.scale = size,
-			});
-		entity.Add<Iryven::MeshRenderer>(mesh, material);
-		entity.Add<Iryven::RigidBody>(Iryven::RigidBody{
-			.type = Iryven::BodyType::Static,
-			});
-		entity.Add<Iryven::Collider>(Iryven::Collider::Box(size * 0.5f));
-	}
+    device_->WaitIdle();
+    DestroyResources();
+    DestroyDepthResources();
+    DestroyPipeline();
+    DestroyShaders();
+    if (swapchain_.IsValid()) {
+      device_->DestroySwapchain(swapchain_);
+    }
+  }
 
-} // namespace
+  Sandbox(const Sandbox &) = delete;
+  Sandbox &operator=(const Sandbox &) = delete;
 
-int main()
-{
-	std::set_terminate([] {
-		try {
-			if (const auto exception = std::current_exception())
-				std::rethrow_exception(exception);
-		}
-		catch (const std::exception& exception) {
-			std::fprintf(stderr, "Unhandled exception: %s\n", exception.what());
-		}
-		catch (...) {
-			std::fprintf(stderr, "Unhandled non-standard exception\n");
-		}
-		std::fflush(stderr);
-		std::abort();
-	});
-	Iryven::Development::DevelopmentSession development;
+  void Run(bool smokeTest = false) {
+    u32 renderedFrames = 0;
+    while (window_.ProcessMessages()) {
+      if (!PrepareFramebuffer()) {
+        glfwWaitEvents();
+        continue;
+      }
 
-	Iryven::Engine engine({
-		.title = "Iryven - Sandbox",
-		.width = 1920,
-		.height = 1080,
-		.enableImGui = true,
-		});
-	engine.PushOverlay(std::make_unique<FpsOverlay>(engine));
+      DrawFrame();
+      if (smokeTest && ++renderedFrames == 3)
+        break;
+    }
+  }
 
-	ma_result result;
-	ma_engine maEngine;
+ private:
+  void CompileShaders() {
+    const auto createShader = [this](ShaderStage stage, const char *entryPoint,
+                                     const char *debugName) {
+      const bool dx12 = device_->GetBackend() == GraphicsAPI::D3D12;
+      const ShaderCompileOutput compiled = ShaderCompiler::CompileFile({
+          .path = "sandbox/basic.hlsl",
+          .stage = stage,
+          .entryPoint = entryPoint,
+          .language = ShaderSourceLanguage::HLSL,
+          .outputFormat =
+              dx12 ? ShaderBinaryFormat::Dxil : ShaderBinaryFormat::Spirv,
+      });
+      const std::span<const std::byte> bytecode = compiled.GetBytecode();
+      return device_->CreateShader({
+          .stage = stage,
+          .bytecode = bytecode.data(),
+          .bytecodeSize = bytecode.size(),
+          .entryPoint = entryPoint,
+          .reflection = compiled.reflection,
+          .debugName = debugName,
+      });
+    };
 
-	result = ma_engine_init(NULL, &maEngine);
-	if (result != MA_SUCCESS) {
-		std::cerr << "Failed to initialize audio engine: " << result << std::endl;
-		return -1;
-	}	
+    vertexShader_ =
+        createShader(ShaderStage::Vertex, "VSmain", "Sandbox vertex shader");
+    try {
+      fragmentShader_ =
+          createShader(ShaderStage::Fragment, "PSmain", "Sandbox pixel shader");
+    } catch (...) {
+      device_->DestroyShader(vertexShader_);
+      vertexShader_ = {};
+      throw;
+    }
+  }
 
-	auto sceneAsset = engine.GetAsyncLoader().RequestModel("assets/models/sponza/Sponza.gltf");
+  void DestroyShaders() {
+    if (fragmentShader_.IsValid()) {
+      device_->DestroyShader(fragmentShader_);
+      fragmentShader_ = {};
+    }
+    if (vertexShader_.IsValid()) {
+      device_->DestroyShader(vertexShader_);
+      vertexShader_ = {};
+    }
+  }
 
-	auto sceneEntity = engine.GetWorld().CreateEntity("Sponza");
-	sceneEntity.Add<Iryven::Transform>(Iryven::Transform{
-		.position = glm::vec3{0.0f, 0.0f, 0.0f},
-		});
-	sceneEntity.Add<Iryven::MeshRenderer>(sceneAsset);
+  void CreatePipeline() {
+    const BindingDesc textureBinding{.binding = 0,
+                                     .type = BindingType::CombinedImageSampler,
+                                     .visibility = ShaderStage::Fragment};
+    textureLayout_ = device_->CreateBindingLayout({&textureBinding, 1});
+    pipeline_ = device_->CreateGraphicsPipeline({
+        .vertexShader = vertexShader_,
+        .fragmentShader = fragmentShader_,
+        .vertexLayouts = {{
+            .stride = sizeof(DuckVertex),
+            .attributes = {{
+                               .location = 0,
+                               .binding = 0,
+                               .format = VertexFormat::Float32x3,
+                               .offset = offsetof(DuckVertex, position),
+                           },
+                           {
+                               .location = 1,
+                               .binding = 0,
+                               .format = VertexFormat::Float32x2,
+                               .offset = offsetof(DuckVertex, uv),
+                               .semanticIndex = 1,
+                           }},
+        }},
+        .layout = {&textureLayout_, 1},
+        .topology = PrimitiveTopology::TriangleList,
+        .raster =
+            {
+                .cullBackFaces = false,
+                .frontFaceCCW = true,
+                .wireframe = false,
+            },
+        .depth =
+            {
+                .depthTestEnable = true,
+                .depthWriteEnable = true,
+                .depthFormat = Format::D32_FLOAT,
+            },
+        .colorFormat = Format::BGRA8_UNORM,
+        .debugName = "Velos Sandbox pipeline",
+    });
+  }
 
-	Iryven::World& world = engine.GetWorld();
-	Iryven::InputHandler& input = engine.GetInput();
+  void DestroyPipeline() {
+    if (pipeline_.IsValid()) {
+      device_->DestroyPipeline(pipeline_);
+      pipeline_ = {};
+    }
+    if (textureLayout_.IsValid())
+      device_->DestroyBindingLayout(textureLayout_);
+    textureLayout_ = {};
+  }
 
-	auto camera = world.CreateEntity("Camera");
-	camera.Add<Iryven::Transform>();
-	camera.Add<CameraMotion>();
-	camera.Add<Iryven::Camera>(Iryven::Camera{
-		.verticalFov = 52.0f,
-	});
+  bool PrepareFramebuffer() {
+    const Extent2D extent = window_.GetClientExtent();
+    if (extent.width == 0 || extent.height == 0) {
+      return false;
+    }
 
-	for (uint32_t i = 0; i < 10; i++) {
-		auto light = world.CreateEntity("Point Light " + std::to_string(i));
-		light.Add<Iryven::Transform>(Iryven::Transform{
-			.position = glm::vec3{
-				-10.0f + 20.0f * static_cast<float>(std::rand()) / RAND_MAX,
-				1.0f + 5.0f * static_cast<float>(std::rand()) / RAND_MAX,
-				-10.0f + 20.0f * static_cast<float>(std::rand()) / RAND_MAX,
-			},
-			});
+    if (extent.width != framebufferWidth_ ||
+        extent.height != framebufferHeight_) {
+      device_->ResizeSwapchain(swapchain_, extent.width, extent.height);
+      framebufferWidth_ = extent.width;
+      framebufferHeight_ = extent.height;
+      DestroyDepthResources();
+      CreateDepthResources();
+    }
 
-		light.Add<Iryven::Light>(Iryven::Light{
-			.type = Iryven::LightType::Point,
-			.color = Iryven::Color{
-				static_cast<float>(std::rand()) / RAND_MAX,
-				static_cast<float>(std::rand()) / RAND_MAX,
-				static_cast<float>(std::rand()) / RAND_MAX,
-				1.0f,
-			},
-			.intensity = 20.5f,
-			.range = 30.0f,
+    return true;
+  }
 
-		});
-	}
+  void DrawFrame() {
+    const FrameBeginResult frame = device_->BeginFrame(swapchain_);
+    if (!frame.success) {
+      return;
+    }
 
-	//auto light = world.CreateEntity("Directional Light");
-	//light.Add<Iryven::Transform>(Iryven::Transform{
-	//	.position = glm::vec3{0.0f, 10.0f, 0.0f},
-	//	.rotation = glm::normalize(glm::angleAxis(glm::radians(-45.0f), glm::vec3{1.0f, 1.0f, 0.0f})),
-	//});
-	//light.Add<Iryven::Light>(Iryven::Light{
-	//	.type = Iryven::LightType::Directional,
-	//	.color = Iryven::Color{1.0f, 1.0f, 1.0f, 1.0f},
-	//	.intensity = 10.0f,
-	//});
+    ICommandList &commandList = device_->GetCommandList(QueueType::Graphics);
+    commandList.Begin();
+    if (textureUpload_.IsValid()) {
+      commandList.Barrier(ImageBarrier{.image = baseColorImage_,
+                                       .newLayout = ImageLayout::TransferDst});
+      commandList.CopyBufferToImage(
+          textureUpload_, baseColorImage_,
+          {
+              .bufferRowLength = textureRowPixels_,
+              .imageExtent = {textureWidth_, textureHeight_, 1},
+          });
+      commandList.Barrier(
+          ImageBarrier{.image = baseColorImage_,
+                       .oldLayout = ImageLayout::TransferDst,
+                       .newLayout = ImageLayout::ShaderReadOnly});
+    }
+    commandList.Barrier({
+        .image = frame.backbufferImage,
+        .oldLayout = device_->GetImageLayout(frame.backbufferImage, 0),
+        .newLayout = ImageLayout::ColorAttachment,
+    });
+    commandList.Barrier({
+        .image = depthImage_,
+        .oldLayout = device_->GetImageLayout(depthImage_, 0),
+        .newLayout = ImageLayout::DepthAttachment,
+        .aspect = ImageAspect::Depth,
+    });
+    commandList.SetViewport({
+        .width = static_cast<float>(framebufferWidth_),
+        .height = static_cast<float>(framebufferHeight_),
+    });
+    commandList.SetScissor({
+        .extent = {framebufferWidth_, framebufferHeight_},
+    });
 
-	//auto cloth = world.CreateEntity("Cloth");
-	//cloth.Add<Iryven::Transform>(Iryven::Transform{
-	//	.position = glm::vec3{0.0f, 2.0f, -3.0f},
-	//});
-	//cloth.Add<Iryven::Cloth>(Iryven::Cloth{
-	//	.resolution = {32u, 32u},
-	//	.size = {2.0f, 2.0f},
-	//	.stiffness = 0.1f,
-	//	.damping = 0.01f,
-	//	.material = MakeMaterial(
-	//		"Cloth", Iryven::Color{0.65f, 0.08f, 0.06f, 1.0f}, 0.75f),
-	//});
+    const ColorAttachmentDesc colorAttachment{
+        .view = frame.backbuffer,
+        .loadOp = LoadOp::Clear,
+        .storeOp = StoreOp::Store,
+        .clearValue = {0.055f, 0.075f, 0.11f, 1.0f},
+    };
+    const DepthAttachmentDesc depthAttachment{
+        .view = depthView_,
+        .loadOp = LoadOp::Clear,
+        .storeOp = StoreOp::DontCare,
+        .clearDepth = 1.0f,
+    };
+    commandList.BeginRendering({
+        .renderArea =
+            {
+                .extent = {framebufferWidth_, framebufferHeight_},
+            },
+        .colorAttachments = &colorAttachment,
+        .colorAttachmentCount = 1,
+        .depthAttachment = &depthAttachment,
+    });
+    commandList.BindPipeline(pipeline_);
+    commandList.SetBindings(pipeline_, 0, textureSet_);
+    glm::mat4 projection = glm::perspectiveRH_ZO(
+        glm::radians(45.0f),
+        static_cast<float>(framebufferWidth_) / framebufferHeight_, 0.1f,
+        100.0f);
+    if (device_->GetBackend() == GraphicsAPI::Vulkan)
+      projection[1][1] *= -1.0f;
+    const glm::mat4 view =
+        glm::lookAtRH(glm::vec3(2.4f, 1.25f, 3.0f), glm::vec3(0.0f),
+                      glm::vec3(0.0f, 1.0f, 0.0f));
+    const struct DrawData {
+      glm::mat4 viewProjection;
+      glm::vec4 baseColorFactor;
+    } drawData{projection * view, baseColorFactor_};
+    static_assert(sizeof(DrawData) == 80);
+    commandList.PushConstants(ShaderStage::Vertex | ShaderStage::Fragment, 0,
+                              sizeof(drawData), &drawData);
+    commandList.BindVertexBuffer(0, vertexBuffer_);
+    commandList.BindIndexBuffer(indexBuffer_, IndexType::U32);
+    commandList.DrawIndexed(indexCount_);
+    commandList.EndRendering();
+    commandList.Barrier({
+        .image = frame.backbufferImage,
+        .oldLayout = ImageLayout::ColorAttachment,
+        .newLayout = ImageLayout::Present,
+    });
+    commandList.End();
+    device_->SubmitAndPresent(swapchain_);
+    if (textureUpload_.IsValid()) {
+      device_->WaitIdle();
+      device_->DestroyBuffer(textureUpload_);
+      textureUpload_ = {};
+    }
+  }
 
-	world.AddSystem<Iryven::Camera, Iryven::Transform, CameraMotion>("Camera Control", [&](float deltaTime, Iryven::Camera&, Iryven::Transform& transform, CameraMotion& motion) {
-		if (deltaTime <= 0.0f) return;
-		static bool once = true;
-		const float moveSpeed = 5.0f;
-		const float lookSpeed = 60.0f; // Degrees per second.
-		const float moveResponse = 12.0f; // Higher values respond faster.
-		const float lookResponse = 16.0f;
-		const float moveBlend = -std::expm1(-moveResponse * deltaTime);
-		const float lookBlend = -std::expm1(-lookResponse * deltaTime);
-		glm::vec3 moveDirection(0.0f);
-		if (input.IsKeyDown(Iryven::Key::W)) moveDirection.z -= 1.0f;
-		if (input.IsKeyDown(Iryven::Key::S)) moveDirection.z += 1.0f;
-		if (input.IsKeyDown(Iryven::Key::A)) moveDirection.x -= 1.0f;
-		if (input.IsKeyDown(Iryven::Key::D)) moveDirection.x += 1.0f;
-		if (input.IsKeyDown(Iryven::Key::Space)) moveDirection.y += 1.0f;
-		if (input.IsKeyDown(Iryven::Key::LeftShift)) moveDirection.y -= 1.0f;
-		if (input.IsKeyDown(Iryven::Key::Escape)) {
-			if (once) {
-				once = false;
-				ma_engine_play_sound(&maEngine, "assets/audio/HaGay.mp3", NULL);
-			}
-		}
+  void CreateDepthResources() {
+    depthImage_ = device_->CreateImage({
+        .width = framebufferWidth_,
+        .height = framebufferHeight_,
+        .format = Format::D32_FLOAT,
+        .usage = ImageUsage::DepthStencil,
+        .debugName = "Velos Sandbox depth image",
+    });
+    depthView_ = device_->CreateImageView({
+        .image = depthImage_,
+        .format = Format::D32_FLOAT,
+        .aspect = ImageAspect::Depth,
+        .debugName = "Velos Sandbox depth view",
+    });
+  }
 
-		const glm::vec3 forward = glm::normalize(transform.rotation) * glm::vec3(0.0f, 0.0f, -1.0f);
-		float pitch = std::asin(glm::clamp(forward.y, -1.0f, 1.0f));
-		float yaw = std::atan2(-forward.x, -forward.z);
-		const float pitchInput = float(input.IsKeyDown(Iryven::Key::Up)) - float(input.IsKeyDown(Iryven::Key::Down));
-		const float yawInput = float(input.IsKeyDown(Iryven::Key::Left)) - float(input.IsKeyDown(Iryven::Key::Right));
-		const glm::vec2 targetLookVelocity = glm::vec2(pitchInput, yawInput) * glm::radians(lookSpeed);
+  void DestroyDepthResources() {
+    if (depthView_.IsValid()) {
+      device_->DestroyImageView(depthView_);
+      depthView_ = {};
+    }
+    if (depthImage_.IsValid()) {
+      device_->DestroyImage(depthImage_);
+      depthImage_ = {};
+    }
+  }
 
-		const glm::vec2 lookDelta = targetLookVelocity * deltaTime
-			+ (motion.lookVelocity - targetLookVelocity) * (lookBlend / lookResponse);
-		motion.lookVelocity += (targetLookVelocity - motion.lookVelocity) * lookBlend;
-		const float nextPitch = pitch + lookDelta.x;
-		pitch = glm::clamp(nextPitch, glm::radians(-89.0f), glm::radians(89.0f));
-		if (pitch != nextPitch) motion.lookVelocity.x = 0.0f;
-		yaw += lookDelta.y;
+  void CreateResources() {
+    const DuckModel model = LoadDuckModel();
+    const auto &vertices = model.vertices;
+    const auto &indices = model.indices;
+    indexCount_ = static_cast<u32>(indices.size());
+    baseColorFactor_ = model.baseColor;
 
-		transform.rotation = glm::normalize(
-			glm::angleAxis(yaw, glm::vec3(0.0f, 1.0f, 0.0f)) *
-			glm::angleAxis(pitch, glm::vec3(1.0f, 0.0f, 0.0f)));
+    vertexBuffer_ = device_->CreateBuffer({
+        .size = sizeof(DuckVertex) * vertices.size(),
+        .usage = BufferUsage::Vertex,
+        .memoryUsage = MemoryUsage::CPUToGPU,
+        .initialData = vertices.data(),
+        .debugName = "Velos Sandbox vertex buffer",
+    });
 
-		if (glm::length(moveDirection) > 0.0f) {
-			moveDirection = glm::normalize(moveDirection);
-		}
-		const glm::vec3 targetVelocity = transform.rotation * moveDirection * moveSpeed;
-		transform.position += targetVelocity * deltaTime
-			+ (motion.velocity - targetVelocity) * (moveBlend / moveResponse);
-		motion.velocity += (targetVelocity - motion.velocity) * moveBlend;
-	});
+    indexBuffer_ = device_->CreateBuffer({
+        .size = sizeof(uint32_t) * indices.size(),
+        .usage = BufferUsage::Index,
+        .memoryUsage = MemoryUsage::CPUToGPU,
+        .initialData = indices.data(),
+        .debugName = "Velos Sandbox index buffer",
+    });
+    textureWidth_ = model.width;
+    textureHeight_ = model.height;
+    const u32 rowPitch = (model.width * 4 + 255) & ~255u;
+    textureRowPixels_ = rowPitch / 4;
+    std::vector<unsigned char> padded(static_cast<size_t>(rowPitch) *
+                                      model.height);
+    for (u32 row = 0; row < model.height; ++row)
+      std::memcpy(
+          padded.data() + static_cast<size_t>(row) * rowPitch,
+          model.pixels.data() + static_cast<size_t>(row) * model.width * 4,
+          model.width * 4);
+    textureUpload_ =
+        device_->CreateBuffer({.size = padded.size(),
+                               .usage = BufferUsage::TransferSrc,
+                               .memoryUsage = MemoryUsage::CPUToGPU,
+                               .initialData = padded.data(),
+                               .debugName = "Duck texture upload"});
+    baseColorImage_ = device_->CreateImage(
+        {.width = model.width,
+         .height = model.height,
+         .format = Format::RGBA8_SRGB,
+         .usage = ImageUsage::TransferDst | ImageUsage::Sampled,
+         .debugName = "Duck base-color texture"});
+    baseColorView_ = device_->CreateImageView(
+        {.image = baseColorImage_, .format = Format::RGBA8_SRGB});
+    baseColorSampler_ =
+        device_->CreateSampler({.debugName = "Duck base-color sampler"});
+    const BindingPoolSize budget{BindingType::CombinedImageSampler, 1};
+    texturePool_ = device_->CreateBindingPool({&budget, 1, 1});
+    textureSet_ = device_->AllocateBindingSet({texturePool_, textureLayout_});
+    const BindingImageInfo imageInfo{baseColorSampler_, baseColorView_};
+    device_->UpdateBindingSet({.dstSet = textureSet_,
+                               .binding = 0,
+                               .type = BindingType::CombinedImageSampler,
+                               .imageInfo = &imageInfo});
+    std::cout << "Loaded Duck.glb: " << vertices.size() << " vertices, "
+              << indices.size() << " indices, " << model.width << 'x'
+              << model.height << " base-color texture\n";
+  }
 
-	engine.Run();
+  void DestroyResources() {
+    if (texturePool_.IsValid())
+      device_->DestroyBindingPool(texturePool_);
+    if (baseColorSampler_.IsValid())
+      device_->DestroySampler(baseColorSampler_);
+    if (baseColorView_.IsValid())
+      device_->DestroyImageView(baseColorView_);
+    if (baseColorImage_.IsValid())
+      device_->DestroyImage(baseColorImage_);
+    if (textureUpload_.IsValid())
+      device_->DestroyBuffer(textureUpload_);
+    if (indexBuffer_.IsValid())
+      device_->DestroyBuffer(indexBuffer_);
+    if (vertexBuffer_.IsValid())
+      device_->DestroyBuffer(vertexBuffer_);
+    indexBuffer_ = {};
+    vertexBuffer_ = {};
+  }
+
+  SandboxWindow window_;
+  DevicePtr device_;
+  SwapchainHandle swapchain_{};
+  ImageHandle depthImage_{};
+  ImageViewHandle depthView_{};
+  ShaderHandle vertexShader_{};
+  ShaderHandle fragmentShader_{};
+  PipelineHandle pipeline_{};
+  u32 framebufferWidth_ = 0;
+  u32 framebufferHeight_ = 0;
+
+  BufferHandle vertexBuffer_{};
+  BufferHandle indexBuffer_{};
+  BufferHandle textureUpload_{};
+  ImageHandle baseColorImage_{};
+  ImageViewHandle baseColorView_{};
+  SamplerHandle baseColorSampler_{};
+  BindingLayoutHandle textureLayout_{};
+  BindingPoolHandle texturePool_{};
+  BindingSetHandle textureSet_{};
+  glm::vec4 baseColorFactor_{1.0f};
+  u32 indexCount_ = 0;
+  u32 textureWidth_ = 0, textureHeight_ = 0, textureRowPixels_ = 0;
+};
+
+}  // namespace
+
+int main(int argc, char **argv) {
+  try {
+    Sandbox sandbox;
+    sandbox.Run(argc > 1 && std::strcmp(argv[1], "--smoke-test") == 0);
+    return 0;
+  } catch (const std::exception &exception) {
+    std::cerr << "Velos Sandbox failed: " << exception.what() << '\n';
+    return 1;
+  }
 }
+
+#else
+
+int main() {
+  std::cerr << "The Sandbox is only available on Windows.\n";
+  return 1;
+}
+
+#endif

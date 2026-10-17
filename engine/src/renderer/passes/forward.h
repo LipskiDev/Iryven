@@ -5,17 +5,17 @@
 namespace Iryven {
 
 class Renderer::ForwardPass final : public FrameGraphRenderPass {
-public:
-	explicit ForwardPass(Renderer& renderer) : renderer_(renderer) {}
+ public:
+  explicit ForwardPass(Renderer &renderer) : renderer_(renderer) {}
 
-	void AddUI() override {}
-	void PreRender(Velos::RHI::ICommandList&, const RenderScene&) override {}
-	void Render(Velos::RHI::ICommandList& commands,
-		const RenderScene& scene) override;
-	void OnResize(Velos::RHI::IDevice&, std::uint32_t, std::uint32_t) override {}
+  void AddUI() override {}
+  void PreRender(Velos::RHI::ICommandList &, const RenderScene &) override {}
+  void Render(Velos::RHI::ICommandList &commands,
+              const RenderScene &scene) override;
+  void OnResize(Velos::RHI::IDevice &, std::uint32_t, std::uint32_t) override {}
 
-private:
-	Renderer& renderer_;
+ private:
+  Renderer &renderer_;
 };
 
-} // namespace Iryven
+}  // namespace Iryven

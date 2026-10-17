@@ -6,52 +6,46 @@
 
 namespace Iryven {
 
-GameLayer::GameLayer()
-    : Layer("Game"), world_(std::make_unique<World>()) {}
+GameLayer::GameLayer() : Layer("Game"), world_(std::make_unique<World>()) {}
 
-World& GameLayer::CreateWorld()
-{
-    world_ = std::make_unique<World>();
-    return *world_;
+World &GameLayer::CreateWorld() {
+  world_ = std::make_unique<World>();
+  return *world_;
 }
 
-World& GameLayer::GetWorld() noexcept
-{
-    return *world_;
+World &GameLayer::GetWorld() noexcept {
+  return *world_;
 }
 
-const World& GameLayer::GetWorld() const noexcept
-{
-    return *world_;
+const World &GameLayer::GetWorld() const noexcept {
+  return *world_;
 }
 
-void GameLayer::OnUpdate(float deltaTime)
-{
-    simulationDeltaTime_ = simulationEnabled_ ? deltaTime : 0.0f;
-    if (simulationEnabled_) world_->Progress(deltaTime);
+void GameLayer::OnUpdate(float deltaTime) {
+  simulationDeltaTime_ = simulationEnabled_ ? deltaTime : 0.0f;
+  if (simulationEnabled_)
+    world_->Progress(deltaTime);
 }
 
-void GameLayer::OnRender(RenderContext& context)
-{
-    using Clock = std::chrono::steady_clock;
-    const auto elapsedMilliseconds = [](Clock::time_point start) {
-        return std::chrono::duration<float, std::milli>(Clock::now() - start)
-            .count();
-    };
+void GameLayer::OnRender(RenderContext &context) {
+  using Clock = std::chrono::steady_clock;
+  const auto elapsedMilliseconds = [](Clock::time_point start) {
+    return std::chrono::duration<float, std::milli>(Clock::now() - start)
+        .count();
+  };
 
-    const auto extractionStart = Clock::now();
-    RenderScene scene = world_->ExtractRenderScene();
-    scene.deltaTime = simulationDeltaTime_;
-    sceneExtractionMs_ = elapsedMilliseconds(extractionStart);
+  const auto extractionStart = Clock::now();
+  RenderScene scene = world_->ExtractRenderScene();
+  scene.deltaTime = simulationDeltaTime_;
+  sceneExtractionMs_ = elapsedMilliseconds(extractionStart);
 
-    const auto drawStart = Clock::now();
-    context.DrawScene(scene);
-    drawSceneMs_ = elapsedMilliseconds(drawStart);
+  const auto drawStart = Clock::now();
+  context.DrawScene(scene);
+  drawSceneMs_ = elapsedMilliseconds(drawStart);
 }
 
-void GameLayer::ResolveAssetReferences(const AsynchronousLoader& loader)
-{
-    world_->ResolveAssetReferences(loader);
+void GameLayer::ResolveAssetReferences(const AsynchronousLoader &loader) {
+  world_->ResolveAssetReferences(loader);
 }
 
-} // namespace Iryven
+}  // namespace Iryven

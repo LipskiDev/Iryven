@@ -6,7 +6,7 @@
 
 namespace Iryven::Importers {
 
-[[nodiscard]] ModelHandle ImportObj(const std::filesystem::path& path);
-[[nodiscard]] ModelHandle ImportGltf(const std::filesystem::path& path);
+[[nodiscard]] ModelHandle ImportObj(const std::filesystem::path &path);
+[[nodiscard]] ModelHandle ImportGltf(const std::filesystem::path &path);
 
-} // namespace Iryven::Importers
+}  // namespace Iryven::Importers

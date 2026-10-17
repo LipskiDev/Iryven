@@ -10,11 +10,11 @@
 namespace Iryven {
 
 struct RenderText {
-    FontHandle font;
-    std::string text;
-    glm::vec2 position{0.0f};
-    float fontSize = 16.0f;
-    Color color = Color::White;
+  FontHandle font;
+  std::string text;
+  glm::vec2 position{0.0f};
+  float fontSize = 16.0f;
+  Color color = Color::White;
 };
 
-} // namespace Iryven
+}  // namespace Iryven

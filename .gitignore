@@ -5,6 +5,8 @@
 /dist/
 /assets/shaders/internal/*.spv
 /assets/models/Bistro_Godot.glb
+# Optional local benchmark data; the San Miguel binary exceeds normal Git limits.
+/assets/models/san-miguel/
 /.vs/
 /external/LivePP/
 *.sln
