@@ -93,6 +93,7 @@ class EditorLayer final : public Iryven::Layer {
   bool deleteSelectedRequested_ = false;
   bool renamePopupRequested_ = false;
   bool showAssets_ = false;
+  bool viewerOnly_ = false;
   bool lightCountView_ = false;
   bool shadowTierView_ = false;
   bool playToggleRequested_ = false;

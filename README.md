@@ -75,7 +75,12 @@ drag inspector values to edit position, rotation in degrees, scale, and light se
 Hold right mouse over the scene to look and use WASD to move, Q/E to move down/up,
 and Shift to move faster. Arrow keys also look while right mouse is held.
 Release right mouse to return to the panels. Press F or use **Focus selected** to frame
-the selected entity's origin. Camera speed, sensitivity, smoothing response, and FOV
+the selected entity's origin. Click **Hide editor (F10)** or press F10 to hide the
+panels and view the scene across the window. Click **Show editor (F10)** or press
+F10 again to restore the panels. Camera navigation remains available in this view.
+Press F5 or click **Play (F5)** / **Stop (F5)** to toggle play mode, including
+while the editor panels are hidden.
+Camera speed, sensitivity, smoothing response, and FOV
 can be adjusted in the inspector.
 
 This first version uses ImGui panels over the main viewport. Press Ctrl+S to save the

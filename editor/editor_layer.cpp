@@ -79,13 +79,17 @@ void EditorLayer::OnUpdate(float) {
 }
 
 void EditorLayer::OnImGuiRender() {
+  if (!ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F5, false))
+    playToggleRequested_ = true;
+  if (!ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F10, false))
+    viewerOnly_ = !viewerOnly_;
   DrawPanels();
   Navigate();
   if (!playing_ && ImGui::GetIO().KeyCtrl &&
       ImGui::IsKeyPressed(ImGuiKey_S, false))
     SaveScene();
-  if (!playing_ && !ImGui::GetIO().WantTextInput && !ImGui::IsAnyItemActive() &&
-      ImGui::IsKeyPressed(ImGuiKey_Delete, false))
+  if (!viewerOnly_ && !playing_ && !ImGui::GetIO().WantTextInput &&
+      !ImGui::IsAnyItemActive() && ImGui::IsKeyPressed(ImGuiKey_Delete, false))
     deleteSelectedRequested_ = true;
 }
 
@@ -780,26 +784,41 @@ void EditorLayer::DrawPanels() {
   const auto flags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar |
                      ImGuiWindowFlags_NoSavedSettings;
+  if (viewerOnly_) {
+    ImGui::SetNextWindowPos({size.x - 12.0f, 12.0f}, ImGuiCond_Always, {1, 0});
+    ImGui::Begin("##viewerControls", nullptr,
+                 flags | ImGuiWindowFlags_AlwaysAutoResize);
+    if (ImGui::Button("Show editor (F10)"))
+      viewerOnly_ = false;
+    ImGui::End();
+    return;
+  }
   ImGui::SetNextWindowPos({0, 0});
   ImGui::SetNextWindowSize({size.x, top});
   ImGui::Begin("##toolbar", nullptr, flags | ImGuiWindowFlags_NoScrollbar);
   ImGui::TextColored({0.48f, 0.85f, 0.77f, 1}, "IRYVEN");
   ImGui::SameLine();
   ImGui::TextDisabled("  /  SCENE EDITOR");
-  if (size.x > 900) {
+  if (size.x > 1150) {
     ImGui::SameLine(left + 24);
     ImGui::TextUnformatted("Starter scene");
     ImGui::SameLine();
     ImGui::TextDisabled("  Perspective");
   }
-  ImGui::SameLine(size.x - 92.0f);
+  ImGui::SameLine(std::max(ImGui::GetCursorPosX(), size.x - 290.0f));
+  const bool hideEditor = ImGui::Button("Hide editor (F10)", {150, 27});
+  ImGui::SameLine();
   if (playing_)
     ImGui::PushStyleColor(ImGuiCol_Button, {0.52f, 0.16f, 0.18f, 1.0f});
-  if (ImGui::Button(playing_ ? "Stop" : "Play", {74, 27}))
+  if (ImGui::Button(playing_ ? "Stop (F5)" : "Play (F5)", {114, 27}))
     playToggleRequested_ = true;
   if (playing_)
     ImGui::PopStyleColor();
   ImGui::End();
+  if (hideEditor) {
+    viewerOnly_ = true;
+    return;
+  }
 
   ImGui::SetNextWindowPos({0, top});
   ImGui::SetNextWindowSize({left, std::max(1.0f, size.y - top - bottom)});
