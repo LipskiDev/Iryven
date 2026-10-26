@@ -18,7 +18,7 @@ foreach($source in Get-ChildItem (Join-Path $root 'assets/shaders/internal') -Fi
         New-Item -ItemType Directory -Force $destination | Out-Null
         $extension=if($target -eq 'DX12'){'.dxil'}else{'.spv'}
         $output=Join-Path $destination ($source.BaseName+'.'+$suffix+$extension)
-        $arguments=@('-T',$profile,'-E','main',"-DIRYVEN_STAGE_$stage=1",$source.FullName,'-Fo',$output)
+        $arguments=@('-T',$profile,'-E','main',$source.FullName,'-Fo',$output)
         if($target -eq 'Vulkan'){$arguments+=@('-spirv','-fspv-target-env=vulkan1.3','-fvk-use-gl-layout')}
         & $dxc @arguments
         if($LASTEXITCODE){Write-Output "FAIL $($source.Name) $stage $target";$failed++;continue}

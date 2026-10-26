@@ -18,7 +18,7 @@ Renderer::ShadingPass::ShadingPass(Renderer &renderer) : renderer_(renderer) {
                                   .reflection = code.reflection,
                                   .debugName = path});
     };
-    vertex_ = createShader("assets/shaders/internal/shading.hlsl",
+    vertex_ = createShader("assets/shaders/internal/shading_vertex.hlsl",
                            ShaderStage::Vertex);
     fragment_ = createShader("assets/shaders/internal/shading.hlsl",
                              ShaderStage::Fragment);

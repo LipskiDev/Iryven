@@ -33,8 +33,8 @@ void RunDeferredShadingPixelTests(bool benchmark, const char *fragmentPath) {
                          ? Velos::ShaderSourceLanguage::SpirvBinary
                          : Velos::ShaderSourceLanguage::HLSL});
   };
-  const auto vs =
-      compile("assets/shaders/internal/shading.hlsl", ShaderStage::Vertex);
+  const auto vs = compile("assets/shaders/internal/shading_vertex.hlsl",
+                          ShaderStage::Vertex);
   const auto fs = compile(
       fragmentPath ? fragmentPath : "assets/shaders/internal/shading.hlsl",
       ShaderStage::Fragment);

@@ -606,8 +606,8 @@ void Renderer::ShadowMappingPass::CreateResources() {
         .debugName = path,
     });
   };
-  meshShader_ =
-      createShader("assets/shaders/internal/shadow.hlsl", ShaderStage::Mesh);
+  meshShader_ = createShader("assets/shaders/internal/shadow_mesh.hlsl",
+                             ShaderStage::Mesh);
   instanceCullShader_ =
       createShader("assets/shaders/internal/shadow_instance_cull.hlsl",
                    ShaderStage::Compute);

@@ -1,8 +1,8 @@
 # HLSL shaders
 
-The engine's 23 shader stages live in 15 unified `internal/*.hlsl` files, such as
-`cloth.hlsl`, `meshlet.hlsl`, and `shading.hlsl`. The obsolete GLSL sources
-and their matching compiled SPIR-V files have been removed.
+The engine's 23 shader stages live in 23 `internal/*.hlsl` entry-point files.
+Each file contains one stage and is shared by Vulkan and DX12. Related stages
+use names such as `meshlet.hlsl`, `meshlet_mesh.hlsl`, and `meshlet_task.hlsl`.
 The Sandbox also uses one HLSL source for Vulkan and DX12.
 
 DXC compiles Shader Model 6.6 entry points to DXIL for DX12 or SPIR-V for Vulkan.
@@ -18,20 +18,26 @@ declarations and row-vector multiplication in translated code are intentional.
 The initial translation used SPIRV-Cross against freshly compiled GLSL; maintain
 the HLSL sources directly from here. SPIRV-Cross is not a build dependency.
 
-`shader_compat.hlsl` isolates Vulkan attributes from DXIL. Push constants map to
-Vulkan push blocks or `b0, space2147483647` on DX12. Vertex attributes use
-`SHADER_INPUT<n>`, with explicit Vulkan locations. The bindless material set has
-textures at binding 0 and samplers at binding 1; both use the same slot index.
-Scalar combined image samplers use matching texture/sampler bindings and
-`vk::combinedImageSampler` when targeting Vulkan.
+Resource bindings come from HLSL register slots and spaces, without duplicate
+`vk::binding` attributes or compiler binding shifts. Other Vulkan attributes
+are declared directly alongside the HLSL declarations. DXC uses
+those attributes for SPIR-V and ignores them for DXIL. Push constants use one
+`[[vk::push_constant]] ConstantBuffer<T>` at `b0, space2147483647`, the register
+space recognized by the runtime compiler. Vertex attributes use `SHADER_INPUT<n>`
+with explicit Vulkan locations. Scalar combined image samplers keep matching
+texture/sampler bindings and `vk::combinedImageSampler`.
 
-Each shader declares its supported stages in a `// IRYVEN_SHADER_STAGES:` header.
-The build and validation tools read that header and compile each stage separately.
-`ShaderCompiler::CompileFile` supplies `IRYVEN_STAGE_VERTEX`, `IRYVEN_STAGE_COMPUTE`,
-etc. automatically from its `stage` argument. Entry points remain `main`; callers
-can compile `cloth.hlsl` as either Vertex or Compute. Direct DXC invocations must
-pass the corresponding `-DIRYVEN_STAGE_*=1` option. Stage binaries have distinct
-names such as `cloth.vert.spv` and `cloth.comp.spv`.
+`shader_compat.hlsl` contains shared screen-coordinate conversions. Callers pass
+the active projection's Y scale, which already carries the renderer's viewport
+convention. Tonemapping derives UVs from pixel position and texture dimensions.
+No shader selects behavior using a backend preprocessor macro.
+
+Each entry-point shader declares its stage in a `// IRYVEN_SHADER_STAGES:` header.
+The build and validation tools read that header to select the compiler profile.
+Entry points remain `main`; stages have separate source files and need no
+preprocessor stage-selection macros. For example, `cloth.hlsl` is the compute
+stage and `cloth_vertex.hlsl` is the vertex stage. Stage binaries have distinct
+names such as `cloth.comp.spv` and `cloth_vertex.vert.spv`.
 
 Shared HLSL headers contain frame data, material/light types, BRDF helpers and
 shadow utilities and have no stage metadata. Existing empty VRS placeholders have no original

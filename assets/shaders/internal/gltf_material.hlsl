@@ -9,9 +9,6 @@ static const uint MATERIAL_HAS_EMISSIVE_TEXTURE = 16u;
 static const uint MATERIAL_HAS_SPECULAR_GLOSSINESS_TEXTURE = 32u;
 static const uint MATERIAL_HAS_TRANSMISSION_TEXTURE = 64u;
 
-// Texture references pack the texture slot in 12 low bits and the shared sampler
-// slot in the upper bits, identically on DXIL and SPIR-V.
-// Decoded material values. LoadMaterial retains the 128-byte CPU GpuMaterial ABI.
 struct GpuMaterial
 {
     float4 baseColorFactor;

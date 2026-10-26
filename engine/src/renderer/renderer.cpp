@@ -1661,7 +1661,7 @@ void Renderer::CreatePipelineResources() {
   gltfTransmissionPipelines_[1] = device_->CreateGraphicsPipeline(gltfDesc);
 
   const auto clothVertexShader = Velos::ShaderCompiler::CompileFile({
-      .path = "assets/shaders/internal/cloth.hlsl",
+      .path = "assets/shaders/internal/cloth_vertex.hlsl",
       .stage = Velos::RHI::ShaderStage::Vertex,
       .entryPoint = "main",
       .language = Velos::ShaderSourceLanguage::HLSL,
@@ -1786,7 +1786,7 @@ void Renderer::CreatePipelineResources() {
   }
 
   const auto textVertexShader = Velos::ShaderCompiler::CompileFile({
-      .path = "assets/shaders/internal/ui_text.hlsl",
+      .path = "assets/shaders/internal/ui_text_vertex.hlsl",
       .stage = Velos::RHI::ShaderStage::Vertex,
       .entryPoint = "main",
       .language = Velos::ShaderSourceLanguage::HLSL,
@@ -1865,7 +1865,7 @@ void Renderer::CreatePipelineResources() {
   });
 
   auto ts = Velos::ShaderCompiler::CompileFile({
-      .path = "assets/shaders/internal/meshlet.hlsl",
+      .path = "assets/shaders/internal/meshlet_task.hlsl",
       .stage = Velos::RHI::ShaderStage::Task,
       .entryPoint = "main",
       .language = Velos::ShaderSourceLanguage::HLSL,
@@ -1873,7 +1873,7 @@ void Renderer::CreatePipelineResources() {
   });
 
   auto ms = Velos::ShaderCompiler::CompileFile({
-      .path = "assets/shaders/internal/meshlet.hlsl",
+      .path = "assets/shaders/internal/meshlet_mesh.hlsl",
       .stage = Velos::RHI::ShaderStage::Mesh,
       .entryPoint = "main",
       .language = Velos::ShaderSourceLanguage::HLSL,

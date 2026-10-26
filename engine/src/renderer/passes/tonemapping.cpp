@@ -24,7 +24,7 @@ Renderer::TonemappingPass::TonemappingPass(Renderer &renderer)
       });
     };
 
-    vertex_ = createShader("assets/shaders/internal/tonemapping.hlsl",
+    vertex_ = createShader("assets/shaders/internal/tonemapping_vertex.hlsl",
                            ShaderStage::Vertex);
     fragment_ = createShader("assets/shaders/internal/tonemapping.hlsl",
                              ShaderStage::Fragment);

@@ -1,4 +1,3 @@
--- Compile every stage declared in a unified HLSL source's metadata header.
 function configureEngineShaders(vulkanSdk)
     local dxc = path.join(vulkanSdk, "Bin", "dxc.exe")
     local stages = {
@@ -11,14 +10,20 @@ function configureEngineShaders(vulkanSdk)
         if declaredStages then
             for _, backend in ipairs({ "Vulkan", "DX12" }) do
                 local binaryExtension = backend == "Vulkan" and ".spv" or ".dxil"
-                local options = backend == "Vulkan" and " -spirv -fspv-target-env=vulkan1.3 -fvk-use-gl-layout" or ""
+                local options
+                if backend == "Vulkan" then
+                    options = " -spirv -fspv-target-env=vulkan1.3 -fvk-use-gl-layout"
+                        .. " -Zi"
+                else
+                    options = " -Zi -Qembed_debug"
+                end
                 local directory = path.join(_WORKING_DIR, "cache/shaders/%{cfg.buildcfg}")
                 local commands = { '{MKDIR} "' .. directory .. '"' }
                 local outputs = {}
                 for stage in declaredStages:gmatch("%S+") do
                     local settings = assert(stages[stage], "Unknown shader stage: " .. stage)
                     local destination = path.join(directory, path.getbasename(source) .. "." .. settings[2] .. binaryExtension)
-                    table.insert(commands, '"' .. dxc .. '" -T ' .. settings[1] .. ' -E main -DIRYVEN_STAGE_' .. stage .. '=1' .. options .. ' "%{file.abspath}" -Fo "' .. destination .. '"')
+                    table.insert(commands, '"' .. dxc .. '" -T ' .. settings[1] .. ' -E main' .. options .. ' "%{file.abspath}" -Fo "' .. destination .. '"')
                     table.insert(outputs, destination)
                 end
                 filter { "files:" .. source, "configurations:*-" .. backend }

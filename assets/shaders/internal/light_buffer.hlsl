@@ -1,7 +1,6 @@
 #ifndef IRYVEN_LIGHT_BUFFER_HLSL
 #define IRYVEN_LIGHT_BUFFER_HLSL
 static const uint MAX_LIGHTS = 512u;
-// Five 16-byte fields: 80 bytes per CPU light.
 struct GpuLight
 {
     float4 positionAndType;   // xyz: world position; w: directional / point / spot type.
@@ -11,7 +10,6 @@ struct GpuLight
     uint4 shadowInfo;         // x: enabled; y: resolution tier; z: cube-array slot.
 };
 
-// The buffer starts with a 16-byte header, followed by 80-byte lights.
 GpuLight LoadLight(ByteAddressBuffer lightBuffer, uint lightIndex)
 {
     uint lightByteOffset = 16u + lightIndex * 80u;
