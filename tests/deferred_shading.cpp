@@ -190,7 +190,7 @@ void RunDeferredShadingPixelTests(bool benchmark, const char *fragmentPath) {
   auto queries = benchmark
                      ? device->CreateTimestampQueryPool({.queryCount = 21})
                      : QueryPoolHandle{};
-  for (int mode = 0; mode < (benchmark ? 4 : 17); ++mode) {
+  for (int mode = 0; mode < (benchmark ? 4 : 28); ++mode) {
     auto bins = initialBins;
     if (mode == 5 || mode == 7 || mode == 8)
       bins.ranges.fill(Iryven::LightDepthBins::kEmpty);
@@ -289,7 +289,10 @@ void RunDeferredShadingPixelTests(bool benchmark, const char *fragmentPath) {
         {{base.r, base.g, base.b, metallic ? 1.0f : 0.0f},
          {0, 0, mode == 0 && !benchmark ? 0.0f : 1.0f, 1},
          {emissive.r, emissive.g, emissive.b, 0.5f},
-         {f0.r, f0.g, f0.b, sg ? 1.0f : 0.0f},
+         {f0.r, f0.g, f0.b,
+          mode == 27 ? 0.5f
+          : sg       ? 1.0f
+                     : 0.0f},
          {0.5f, 0, 0, 0},
          {0.25f, 0.5f, 0.75f, 1}}};
     auto &commands = device->GetCommandList();
@@ -327,9 +330,12 @@ void RunDeferredShadingPixelTests(bool benchmark, const char *fragmentPath) {
       glm::mat4 inverseVP;
       std::uint32_t lightCountView;
       std::uint32_t shadowTierView;
+      std::uint32_t gbufferView = 0;
     };
-    const Constants constants{inverseVP, !benchmark && mode >= 15 ? 1u : 0u, 0};
-    commands.PushConstants(ShaderStage::Fragment, 0, 72, &constants);
+    const Constants constants{
+        inverseVP, !benchmark && mode >= 15 && mode <= 16 ? 1u : 0u, 0,
+        !benchmark && mode >= 17 ? std::uint32_t(std::min(mode - 16, 10)) : 0u};
+    commands.PushConstants(ShaderStage::Fragment, 0, 76, &constants);
     if (benchmark) {
       commands.WriteTimestamp(queries, 0, ShaderStage::Fragment);
       for (std::uint32_t sample = 0; sample < 20; ++sample) {
@@ -374,7 +380,19 @@ void RunDeferredShadingPixelTests(bool benchmark, const char *fragmentPath) {
     const float diffuseWeight = sg ? 0.6f : metallic ? 0.0f : 1.0f;
     const glm::vec3 diffuse =
         (sg ? glm::vec3(1) : 1.0f - f0) * diffuseWeight * base / pi;
-    const glm::vec3 expected = mode == 15   ? glm::vec3(0, 0, 1)
+    const std::array<glm::vec3, 11> debugExpected{base,
+                                                  glm::vec3(0),
+                                                  glm::vec3(0.5f, 0.5f, 1),
+                                                  glm::vec3(1),
+                                                  emissive,
+                                                  glm::vec3(0.5f),
+                                                  f0,
+                                                  glm::vec3(0),
+                                                  glm::vec3(0.5f),
+                                                  glm::vec3(0.2f),
+                                                  f0};
+    const glm::vec3 expected = mode >= 17   ? debugExpected.at(mode - 17)
+                               : mode == 15 ? glm::vec3(0, 0, 1)
                                : mode == 16 ? glm::vec3(0)
                                : mode == 0  ? glm::vec3(0.25f, 0.5f, 0.75f)
                                : mode == 4 || mode == 5 || mode >= 12

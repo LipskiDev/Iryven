@@ -1032,19 +1032,48 @@ void EditorLayer::DrawPanels() {
                 100, "%.0f deg");
     ImGui::TextDisabled("Lower response = softer motion");
   }
-  if (ImGui::CollapsingHeader("Lighting debug")) {
+  if (ImGui::CollapsingHeader("Renderer debug")) {
     if (ImGui::Checkbox("Light count", &lightCountView_)) {
+      gbufferView_ = Iryven::GBufferView::None;
+      engine_.SetGBufferView(gbufferView_);
       if (lightCountView_)
         shadowTierView_ = false;
       engine_.SetLightCountView(lightCountView_);
       engine_.SetShadowTierView(shadowTierView_);
     }
     if (ImGui::Checkbox("Shadow resolution", &shadowTierView_)) {
+      gbufferView_ = Iryven::GBufferView::None;
+      engine_.SetGBufferView(gbufferView_);
       if (shadowTierView_)
         lightCountView_ = false;
       engine_.SetLightCountView(lightCountView_);
       engine_.SetShadowTierView(shadowTierView_);
     }
+    ImGui::SeparatorText("Geometry and G-Buffer outputs");
+    const auto drawGBufferView = [&](const char *label,
+                                     Iryven::GBufferView view) {
+      bool enabled = gbufferView_ == view;
+      if (ImGui::Checkbox(label, &enabled)) {
+        gbufferView_ = enabled ? view : Iryven::GBufferView::None;
+        lightCountView_ = false;
+        shadowTierView_ = false;
+        engine_.SetLightCountView(false);
+        engine_.SetShadowTierView(false);
+        engine_.SetGBufferView(gbufferView_);
+      }
+    };
+    drawGBufferView("Meshlets", Iryven::GBufferView::Meshlets);
+    if (gbufferView_ == Iryven::GBufferView::Meshlets)
+      ImGui::TextDisabled("Gray = geometry without meshlets");
+    drawGBufferView("Base color", Iryven::GBufferView::BaseColor);
+    drawGBufferView("Metallic", Iryven::GBufferView::Metallic);
+    drawGBufferView("World normals", Iryven::GBufferView::Normal);
+    drawGBufferView("Roughness", Iryven::GBufferView::Roughness);
+    drawGBufferView("Emissive", Iryven::GBufferView::Emissive);
+    drawGBufferView("Ambient occlusion", Iryven::GBufferView::AmbientOcclusion);
+    drawGBufferView("Specular reflectance", Iryven::GBufferView::Specular);
+    drawGBufferView("Material workflow", Iryven::GBufferView::MaterialWorkflow);
+    drawGBufferView("Depth", Iryven::GBufferView::Depth);
     if (shadowTierView_) {
       ImGui::TextColored({1.0f, 0.2f, 0.15f, 1.0f}, "High / 1024");
       ImGui::TextColored({1.0f, 0.8f, 0.1f, 1.0f}, "Medium / 512");

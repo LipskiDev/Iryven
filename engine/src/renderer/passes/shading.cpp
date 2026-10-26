@@ -108,7 +108,6 @@ void Renderer::ShadingPass::PreRender(ICommandList &, const RenderScene &) {
       .imageInfo = &shadowImage,
   });
 }
-
 void Renderer::ShadingPass::Render(ICommandList &commands,
                                    const RenderScene &scene) {
   if (!scene.camera)
@@ -124,14 +123,16 @@ void Renderer::ShadingPass::Render(ICommandList &commands,
     glm::mat4 inverseViewProjection;
     std::uint32_t lightCountView = 0;
     std::uint32_t shadowTierView = 0;
+    std::uint32_t gbufferView = 0;
   };
   static_assert(sizeof(Constants) == 80);
   Constants constants{
       .inverseViewProjection = inverseViewProjection,
       .lightCountView = renderer_.lightCountView_ ? 1u : 0u,
       .shadowTierView = renderer_.shadowTierView_ ? 1u : 0u,
+      .gbufferView = static_cast<std::uint32_t>(renderer_.gbufferView_),
   };
-  commands.PushConstants(ShaderStage::Fragment, 0, 72, &constants);
+  commands.PushConstants(ShaderStage::Fragment, 0, 76, &constants);
   commands.Draw(3);
 }
 }  // namespace Iryven

@@ -96,6 +96,7 @@ class EditorLayer final : public Iryven::Layer {
   bool viewerOnly_ = false;
   bool lightCountView_ = false;
   bool shadowTierView_ = false;
+  Iryven::GBufferView gbufferView_ = Iryven::GBufferView::None;
   bool playToggleRequested_ = false;
   bool playing_ = false;
   std::vector<EntitySnapshot> playSnapshot_;

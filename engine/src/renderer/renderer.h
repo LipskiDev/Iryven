@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <iryven/rendering/gbuffer_view.h>
 #include <memory>
 #include <span>
 #include <unordered_map>
@@ -62,6 +63,7 @@ class Renderer final : public RenderContext {
   void ToggleCullingCameraFreeze();
   void SetLightCountView(bool enabled) { lightCountView_ = enabled; }
   void SetShadowTierView(bool enabled) { shadowTierView_ = enabled; }
+  void SetGBufferView(GBufferView view) { gbufferView_ = view; }
   void InitializeImGui();
   void ShutdownImGui();
   void BeginImGuiFrame();
@@ -373,6 +375,7 @@ class Renderer final : public RenderContext {
   RendererCpuTimings cpuTimings_{};
   bool lightCountView_ = false;
   bool shadowTierView_ = false;
+  Iryven::GBufferView gbufferView_ = Iryven::GBufferView::None;
   std::uint64_t pointShadowMemoryBudget_ = kDefaultPointShadowMemoryBudget;
   SparseShadowAllocator sparseShadowAllocator_{};
   std::vector<PointShadowAssignment> pointShadowAssignments_;

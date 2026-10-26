@@ -1,6 +1,14 @@
 // IRYVEN_SHADER_STAGES: FRAGMENT
 // Explicit buffer offsets match the CPU resource layouts.
 
+struct TonemappingConstants
+{
+  uint showGBuffer;
+};
+
+[[vk::push_constant]]
+ConstantBuffer<TonemappingConstants> tonemappingConstants : register(b0, space2147483647);
+
 [[vk::combinedImageSampler]] Texture2D<float4> hdrSceneColor : register(t0, space0);
 [[vk::combinedImageSampler]] SamplerState hdrSceneColorSampler : register(s0, space0);
 
@@ -21,7 +29,7 @@ void RunFragment()
 {
   float3 hdrColor = hdrSceneColor.Sample(hdrSceneColorSampler, textureCoordinates).xyz;
   float3 mappedColor = hdrColor / (1.0f.xxx + hdrColor);
-  outputColor = float4(mappedColor, 1.0f);
+  outputColor = float4(tonemappingConstants.showGBuffer != 0u ? hdrColor : mappedColor, 1.0f);
 }
 
 StageOutput main(StageInput stageInput)

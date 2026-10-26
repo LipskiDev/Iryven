@@ -79,6 +79,10 @@ int RunDeferredRendererTests() {
       {.transform = glm::translate(glm::mat4(1), glm::vec3(2, 0, 0)),
        .mesh = meshletMesh,
        .material = alternateMaterial});
+  scene.objects.push_back(
+      {.transform = glm::translate(glm::mat4(1), glm::vec3(3, 0, 0)),
+       .mesh = meshletMesh,
+       .material = material});
   scene.deltaTime = 1.0f / 60.0f;
   int rendered = 0;
   for (int frame = 0; frame < 12; ++frame) {
@@ -96,6 +100,8 @@ int RunDeferredRendererTests() {
       }
 #endif
     }
+    renderer.SetGBufferView(frame >= 3 && frame <= 8 ? GBufferView::Meshlets
+                                                     : GBufferView::None);
     window->PollEvents();
     if (!renderer.BeginFrame())
       continue;

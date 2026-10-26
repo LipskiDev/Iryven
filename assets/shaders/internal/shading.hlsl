@@ -16,6 +16,7 @@ struct ShadingConstants
   row_major float4x4 shadingInverseViewProjection;
   uint shadingLightCountView;
   uint shadingShadowTierView;
+  uint shadingGBufferView;
 };
 
 [[vk::push_constant]]
@@ -357,6 +358,47 @@ void RunFragment()
   float4 baseColorMetallicSample = baseMetallic.Load(int3(pixel, 0));
   float4 emissiveOcclusionSample = emissiveOcclusion.Load(int3(pixel, 0));
   float4 reflectanceAtNormal = specularBuffer.Load(int3(pixel, 0));
+  // Values match GBufferView. Remap signed normals for display.
+  if (shadingConstants.shadingGBufferView != 0u)
+  {
+    float3 debugColor = 0.0f.xxx;
+    switch (shadingConstants.shadingGBufferView)
+    {
+      case 1u:
+        debugColor = baseColorMetallicSample.xyz;
+        break;
+      case 2u:
+        debugColor = baseColorMetallicSample.www;
+        break;
+      case 3u:
+        debugColor = normalize(normalRoughnessSample.xyz) * 0.5f + 0.5f;
+        break;
+      case 4u:
+        debugColor = normalRoughnessSample.www;
+        break;
+      case 5u:
+        debugColor = emissiveOcclusionSample.xyz;
+        break;
+      case 6u:
+        debugColor = emissiveOcclusionSample.www;
+        break;
+      case 7u:
+        debugColor = reflectanceAtNormal.xyz;
+        break;
+      case 8u:
+        debugColor = reflectanceAtNormal.www;
+        break;
+      case 9u:
+        debugColor = depth.xxx;
+        break;
+      case 10u:
+        debugColor =
+            (reflectanceAtNormal.w > 0.25f && reflectanceAtNormal.w < 0.75f) ? reflectanceAtNormal.xyz : 0.2f.xxx;
+        break;
+    }
+    outputColor = float4(debugColor, 1.0f);
+    return;
+  }
   float3 lighting = EvaluateDirectLighting(
       worldPosition, (normalize(normalRoughnessSample.xyz)), (normalize(cameraPosition.xyz - worldPosition)),
       baseColorMetallicSample.xyz, baseColorMetallicSample.w, normalRoughnessSample.w, emissiveOcclusionSample.w,

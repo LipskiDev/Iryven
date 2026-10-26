@@ -563,10 +563,12 @@ void Renderer::DrawPreparedObject(ICommandList &commands,
     glm::uvec4 info;
   };
   static_assert(sizeof(DrawConstants) == 80);
+  const std::uint32_t showMeshlets =
+      gbufferView_ == GBufferView::Meshlets ? 1u : 0u;
   if (draw.meshletCount) {
     const DrawConstants constants{
-        object.transform, glm::uvec4(draw.meshletOffset, draw.materialSlot, 0u,
-                                     transmissionPhase)};
+        object.transform, glm::uvec4(draw.meshletOffset, draw.materialSlot,
+                                     showMeshlets, transmissionPhase)};
     commands.SetBindings(draw.pipeline, 2, draw.meshletBindings);
     commands.PushConstants(
         ShaderStage::Mesh | ShaderStage::Fragment | ShaderStage::Task, 0,
@@ -575,7 +577,7 @@ void Renderer::DrawPreparedObject(ICommandList &commands,
   } else {
     const DrawConstants constants{
         object.transform,
-        glm::uvec4(draw.materialSlot, 0u, 0u, transmissionPhase)};
+        glm::uvec4(draw.materialSlot, 0u, showMeshlets, transmissionPhase)};
     commands.PushConstants(ShaderStage::Vertex | ShaderStage::Fragment, 0,
                            sizeof(constants), &constants);
     commands.BindVertexBuffer(

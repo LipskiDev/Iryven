@@ -435,11 +435,15 @@ void ShadeMaterial(uint materialIndex, uint phase)
   }
 }
 
-
+#include "meshlet_debug.hlsl"
 
 void RunFragment()
 {
   ShadeMaterial(drawConstants.drawMeshletInfo.y, drawConstants.drawMeshletInfo.w);
+  if (drawConstants.drawMeshletInfo.z != 0u)
+  {
+    outputColor = float4(drawConstants.drawMeshletInfo.w == 1u ? 0.0f.xxx : MeshletColor(meshletId), 1.0f);
+  }
 }
 
 StageOutput main(StageInput stageInput)

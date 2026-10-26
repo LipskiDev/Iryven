@@ -76,10 +76,13 @@ void Renderer::GBufferPass::PreRender(Velos::RHI::ICommandList &commands,
     auto draw = renderer_.PrepareObjectDraw(*objects.front());
     if (!draw.pipeline.IsValid())
       continue;
+    const bool useInstancing =
+        objects.size() > 1 &&
+        !(draw.meshletCount && renderer_.gbufferView_ == GBufferView::Meshlets);
     const auto pipeline =
-        objects.size() > 1 ? renderer_.gltfInstancedPipeline_ : draw.pipeline;
+        useInstancing ? renderer_.gltfInstancedPipeline_ : draw.pipeline;
     BufferHandle instances;
-    if (objects.size() > 1)
+    if (useInstancing)
       instances = renderer_.PrepareObjectInstances(commands, objects);
     preparedBatches_.push_back({std::move(objects), draw, pipeline, instances});
   }
@@ -105,12 +108,17 @@ void Renderer::GBufferPass::Render(ICommandList &commands,
   for (const auto &batch : preparedBatches_) {
     const bool bindSharedState = boundPipeline.id != batch.pipeline.id;
     const auto &objects = batch.objects;
-    if (objects.size() > 1)
+    if (batch.instances)
       renderer_.DrawPreparedObjectBatch(commands, objects, batch.instances,
                                         bindSharedState);
-    else
-      renderer_.DrawPreparedObject(commands, *objects.front(), batch.draw, 0,
-                                   bindSharedState);
+    else {
+      bool bindObjectState = bindSharedState;
+      for (const auto *object : objects) {
+        renderer_.DrawPreparedObject(commands, *object, batch.draw, 0,
+                                     bindObjectState);
+        bindObjectState = false;
+      }
+    }
     boundPipeline = batch.pipeline;
   }
   renderer_.DrawCloths(commands, scene);

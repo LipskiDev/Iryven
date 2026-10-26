@@ -241,6 +241,9 @@ std::unique_ptr<Layer> Engine::PopOverlay(Layer &overlay) {
 void Iryven::Engine::SetLightCountView(bool enabled) {
   renderer_->SetLightCountView(enabled);
 }
+void Iryven::Engine::SetGBufferView(GBufferView view) {
+  renderer_->SetGBufferView(view);
+}
 void Iryven::Engine::SetShadowTierView(bool enabled) {
   renderer_->SetShadowTierView(enabled);
 }

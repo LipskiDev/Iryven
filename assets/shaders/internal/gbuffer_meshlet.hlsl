@@ -185,7 +185,7 @@ void ShadeMaterial(uint materialIndex, uint phase)
   gSpecular = float4(reflectanceAtNormal, float(specularGlossiness));
 }
 
-
+#include "meshlet_debug.hlsl"
 
 StageOutput main(StageInput stageInput)
 {
@@ -197,6 +197,11 @@ StageOutput main(StageInput stageInput)
   meshletId = stageInput.meshletId;
   meshletCenter = stageInput.meshletCenter;
   ShadeMaterial(drawConstants.drawMeshletInfo.y, 0u);
+  if (drawConstants.drawMeshletInfo.z != 0u)
+  {
+    // Alpha 0.5 marks meshlet geometry for the deferred debug view.
+    gSpecular = float4(MeshletColor(meshletId), 0.5f);
+  }
   StageOutput stageOutput;
   stageOutput.gBaseMetallic = gBaseMetallic;
   stageOutput.gNormalRoughness = gNormalRoughness;

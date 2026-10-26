@@ -116,6 +116,10 @@ void Renderer::TonemappingPass::Render(ICommandList &commands,
                                        const RenderScene &) {
   commands.BindPipeline(pipeline_);
   commands.SetBindings(pipeline_, 0, sets_.at(renderer_.frame_.frameIndex));
+  const std::uint32_t showGBuffer =
+      renderer_.gbufferView_ != GBufferView::None ? 1u : 0u;
+  commands.PushConstants(ShaderStage::Fragment, 0, sizeof(showGBuffer),
+                         &showGBuffer);
   commands.Draw(3);
 }
 

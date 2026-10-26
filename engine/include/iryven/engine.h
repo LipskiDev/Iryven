@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <iryven/rendering/gbuffer_view.h>
 #include <memory>
 #include <string>
 
@@ -87,6 +88,7 @@ class Engine {
   void Run();
   void SetLightCountView(bool enabled);
   void SetShadowTierView(bool enabled);
+  void SetGBufferView(GBufferView view);
 
  private:
   void OnEvent(Event &event);
