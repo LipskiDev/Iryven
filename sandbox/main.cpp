@@ -12,7 +12,8 @@
 #include <cstring>
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
-#include "duck_model.h"
+#include "cloth_demo.h"
+#include <algorithm>
 
 #if defined(_WIN32)
 
@@ -79,8 +80,8 @@ class Sandbox final {
  public:
   Sandbox()
       : window_(Iryven::GetBuildGraphicsBackend() == GraphicsAPI::D3D12
-                    ? "Velos Sandbox - DX12"
-                    : "Velos Sandbox - Vulkan",
+                    ? "Cloth Sandbox - DX12"
+                    : "Cloth Sandbox - Vulkan",
                 1920, 1080),
         device_(CreateDevice({
             .graphicsAPI = Iryven::GetBuildGraphicsBackend(),
@@ -206,18 +207,18 @@ class Sandbox final {
         .vertexShader = vertexShader_,
         .fragmentShader = fragmentShader_,
         .vertexLayouts = {{
-            .stride = sizeof(DuckVertex),
+            .stride = sizeof(ClothVertex),
             .attributes = {{
                                .location = 0,
                                .binding = 0,
                                .format = VertexFormat::Float32x3,
-                               .offset = offsetof(DuckVertex, position),
+                               .offset = offsetof(ClothVertex, position),
                            },
                            {
                                .location = 1,
                                .binding = 0,
                                .format = VertexFormat::Float32x2,
-                               .offset = offsetof(DuckVertex, uv),
+                               .offset = offsetof(ClothVertex, uv),
                                .semanticIndex = 1,
                            }},
         }},
@@ -269,6 +270,17 @@ class Sandbox final {
   }
 
   void DrawFrame() {
+    // Finish GPU reads before updating the vertex buffer shared by frames.
+    device_->WaitIdle();
+    const double now = glfwGetTime();
+    cloth_.Advance(static_cast<float>(std::min(now - previousTime_, 0.05)));
+    previousTime_ = now;
+    void *mapped = device_->MapBuffer(vertexBuffer_);
+    if (!mapped)
+      throw std::runtime_error("Failed to map the cloth vertex buffer");
+    std::memcpy(mapped, cloth_.vertices.data(),
+                cloth_.vertices.size() * sizeof(ClothVertex));
+    device_->UnmapBuffer(vertexBuffer_);
     const FrameBeginResult frame = device_->BeginFrame(swapchain_);
     if (!frame.success) {
       return;
@@ -339,7 +351,7 @@ class Sandbox final {
     if (device_->GetBackend() == GraphicsAPI::Vulkan)
       projection[1][1] *= -1.0f;
     const glm::mat4 view =
-        glm::lookAtRH(glm::vec3(2.4f, 1.25f, 3.0f), glm::vec3(0.0f),
+        glm::lookAtRH(glm::vec3(0.5f, 0.2f, 4.8f), glm::vec3(0.0f),
                       glm::vec3(0.0f, 1.0f, 0.0f));
     const struct DrawData {
       glm::mat4 viewProjection;
@@ -394,14 +406,15 @@ class Sandbox final {
   }
 
   void CreateResources() {
-    const DuckModel model = LoadDuckModel();
+    const ClothDemo &model = cloth_;
+    previousTime_ = glfwGetTime();
     const auto &vertices = model.vertices;
     const auto &indices = model.indices;
     indexCount_ = static_cast<u32>(indices.size());
     baseColorFactor_ = model.baseColor;
 
     vertexBuffer_ = device_->CreateBuffer({
-        .size = sizeof(DuckVertex) * vertices.size(),
+        .size = sizeof(ClothVertex) * vertices.size(),
         .usage = BufferUsage::Vertex,
         .memoryUsage = MemoryUsage::CPUToGPU,
         .initialData = vertices.data(),
@@ -431,17 +444,17 @@ class Sandbox final {
                                .usage = BufferUsage::TransferSrc,
                                .memoryUsage = MemoryUsage::CPUToGPU,
                                .initialData = padded.data(),
-                               .debugName = "Duck texture upload"});
+                               .debugName = "Cloth texture upload"});
     baseColorImage_ = device_->CreateImage(
         {.width = model.width,
          .height = model.height,
          .format = Format::RGBA8_SRGB,
          .usage = ImageUsage::TransferDst | ImageUsage::Sampled,
-         .debugName = "Duck base-color texture"});
+         .debugName = "Cloth base-color texture"});
     baseColorView_ = device_->CreateImageView(
         {.image = baseColorImage_, .format = Format::RGBA8_SRGB});
     baseColorSampler_ =
-        device_->CreateSampler({.debugName = "Duck base-color sampler"});
+        device_->CreateSampler({.debugName = "Cloth base-color sampler"});
     const BindingPoolSize budget{BindingType::CombinedImageSampler, 1};
     texturePool_ = device_->CreateBindingPool({&budget, 1, 1});
     textureSet_ = device_->AllocateBindingSet({texturePool_, textureLayout_});
@@ -450,9 +463,9 @@ class Sandbox final {
                                .binding = 0,
                                .type = BindingType::CombinedImageSampler,
                                .imageInfo = &imageInfo});
-    std::cout << "Loaded Duck.glb: " << vertices.size() << " vertices, "
-              << indices.size() << " indices, " << model.width << 'x'
-              << model.height << " base-color texture\n";
+    std::cout << "Single cloth: " << vertices.size() << " vertices, "
+              << indices.size()
+              << " indices; two pinned corners, gravity and wind\n";
   }
 
   void DestroyResources() {
@@ -474,6 +487,8 @@ class Sandbox final {
     vertexBuffer_ = {};
   }
 
+  ClothDemo cloth_;
+  double previousTime_ = 0.0;
   SandboxWindow window_;
   DevicePtr device_;
   SwapchainHandle swapchain_{};

@@ -43,15 +43,14 @@ Build and run `Win32WindowTests` to check native input/event handling, and
 validation, input forwarding, and repeated initialization/shutdown. The DX12
 editor uses fence-backed timeline synchronization for frame-graph queue dependencies.
 
-## Textured duck Sandbox
+## Cloth Sandbox
 
-Sandbox renders `assets/models/Duck.glb` with its embedded base-color texture
-through the selected Vulkan or DX12 backend on Windows.
+Sandbox showcases one simulated cloth pinned at its two top corners, with gravity,
+wind, and a procedural checker texture through Vulkan or DX12 on Windows.
 Generate with `premake5 vs2026` (Visual Studio 2026) or `premake5 vs2022`
 (Visual Studio 2022), then build the **Sandbox** project. The Windows SDK supplies
 DXC; the build copies `dxcompiler.dll` and `dxil.dll` beside Sandbox.exe.
-Run from the repository root so the model and `sandbox/basic.*` shaders can be
-loaded. Pass `--smoke-test` to render three frames and exit cleanly.
+Run from the repository root so the `sandbox/basic.hlsl` shader can be loaded. Pass `--smoke-test` to render three frames and exit cleanly.
 
 ## Tiny editor
 
