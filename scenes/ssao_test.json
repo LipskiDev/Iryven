@@ -1,0 +1,1370 @@
+{
+  "results": [
+    {
+      "name": "Editor Camera",
+      "tags": [
+        "Iryven.World.SceneEntityTag"
+      ],
+      "components": {
+        "Iryven.Camera": {
+          "farPlane": 60,
+          "primary": true,
+          "nearPlane": 0.1,
+          "verticalFov": 54
+        },
+        "Iryven.Transform": {
+          "rotation": {
+            "y": 0.0,
+            "w": 0.974370064785235,
+            "x": -0.224951054343865,
+            "z": 0.0
+          },
+          "scale": {
+            "y": 1.0,
+            "x": 1.0,
+            "z": 1.0
+          },
+          "position": {
+            "y": 6.5,
+            "x": 0.0,
+            "z": 12.0
+          }
+        }
+      }
+    },
+    {
+      "name": "Sun",
+      "tags": [
+        "Iryven.World.SceneEntityTag"
+      ],
+      "components": {
+        "Iryven.Light": {
+          "enabled": true,
+          "color": {
+            "value": {
+              "y": 1,
+              "w": 1,
+              "x": 1,
+              "z": 1
+            }
+          },
+          "type": "Directional",
+          "outerConeAngle": 30,
+          "innerConeAngle": 20,
+          "intensity": 4.0,
+          "range": 20
+        },
+        "Iryven.Transform": {
+          "rotation": {
+            "y": 0.0,
+            "w": 0.923879532511287,
+            "x": -0.38268343236509,
+            "z": 0.0
+          },
+          "scale": {
+            "y": 1.0,
+            "x": 1.0,
+            "z": 1.0
+          },
+          "position": {
+            "y": 5.0,
+            "x": 0.0,
+            "z": 0.0
+          }
+        }
+      }
+    },
+    {
+      "name": "Floor",
+      "tags": [
+        "Iryven.World.SceneEntityTag"
+      ],
+      "components": {
+        "EditorRenderable": {
+          "emissive": {
+            "value": {
+              "y": 0,
+              "w": 1,
+              "x": 0,
+              "z": 0
+            }
+          },
+          "roughness": 1,
+          "baseColor": {
+            "value": {
+              "y": 0.78,
+              "w": 1,
+              "x": 0.78,
+              "z": 0.78
+            }
+          },
+          "normalScale": 1,
+          "metallic": 0,
+          "primitive": "Cube",
+          "occlusionStrength": 1
+        },
+        "Iryven.Transform": {
+          "rotation": {
+            "y": 0.0,
+            "w": 1.0,
+            "x": 0.0,
+            "z": 0.0
+          },
+          "scale": {
+            "y": 0.3,
+            "x": 14.0,
+            "z": 12.0
+          },
+          "position": {
+            "y": -0.15,
+            "x": 0.0,
+            "z": -1.0
+          }
+        },
+        "Iryven.MeshRenderer": null
+      }
+    },
+    {
+      "name": "Back wall - floor crease",
+      "tags": [
+        "Iryven.World.SceneEntityTag"
+      ],
+      "components": {
+        "EditorRenderable": {
+          "emissive": {
+            "value": {
+              "y": 0,
+              "w": 1,
+              "x": 0,
+              "z": 0
+            }
+          },
+          "roughness": 1,
+          "baseColor": {
+            "value": {
+              "y": 0.78,
+              "w": 1,
+              "x": 0.78,
+              "z": 0.78
+            }
+          },
+          "normalScale": 1,
+          "metallic": 0,
+          "primitive": "Cube",
+          "occlusionStrength": 1
+        },
+        "Iryven.Transform": {
+          "rotation": {
+            "y": 0.0,
+            "w": 1.0,
+            "x": 0.0,
+            "z": 0.0
+          },
+          "scale": {
+            "y": 3.0,
+            "x": 14.0,
+            "z": 0.3
+          },
+          "position": {
+            "y": 1.5,
+            "x": 0.0,
+            "z": -6.15
+          }
+        },
+        "Iryven.MeshRenderer": null
+      }
+    },
+    {
+      "name": "Left wall - inside corner",
+      "tags": [
+        "Iryven.World.SceneEntityTag"
+      ],
+      "components": {
+        "EditorRenderable": {
+          "emissive": {
+            "value": {
+              "y": 0,
+              "w": 1,
+              "x": 0,
+              "z": 0
+            }
+          },
+          "roughness": 1,
+          "baseColor": {
+            "value": {
+              "y": 0.78,
+              "w": 1,
+              "x": 0.78,
+              "z": 0.78
+            }
+          },
+          "normalScale": 1,
+          "metallic": 0,
+          "primitive": "Cube",
+          "occlusionStrength": 1
+        },
+        "Iryven.Transform": {
+          "rotation": {
+            "y": 0.0,
+            "w": 1.0,
+            "x": 0.0,
+            "z": 0.0
+          },
+          "scale": {
+            "y": 3.0,
+            "x": 0.3,
+            "z": 10.0
+          },
+          "position": {
+            "y": 1.5,
+            "x": -7.15,
+            "z": -1.0
+          }
+        },
+        "Iryven.MeshRenderer": null
+      }
+    },
+    {
+      "name": "Cube",
+      "tags": [
+        "Iryven.World.SceneEntityTag"
+      ],
+      "components": {
+        "EditorRenderable": {
+          "emissive": {
+            "value": {
+              "y": 0,
+              "w": 1,
+              "x": 0,
+              "z": 0
+            }
+          },
+          "roughness": 1,
+          "baseColor": {
+            "value": {
+              "y": 0.78,
+              "w": 1,
+              "x": 0.78,
+              "z": 0.78
+            }
+          },
+          "normalScale": 1,
+          "metallic": 0,
+          "primitive": "Cube",
+          "occlusionStrength": 1
+        },
+        "Iryven.Transform": {
+          "rotation": {
+            "y": 0.0,
+            "w": 1.0,
+            "x": 0.0,
+            "z": 0.0
+          },
+          "scale": {
+            "y": 1.2,
+            "x": 1.2,
+            "z": 1.2
+          },
+          "position": {
+            "y": 0.6,
+            "x": -5.8,
+            "z": -4.8
+          }
+        },
+        "Iryven.MeshRenderer": null
+      }
+    },
+    {
+      "name": "Sphere touching back wall",
+      "tags": [
+        "Iryven.World.SceneEntityTag"
+      ],
+      "components": {
+        "EditorRenderable": {
+          "emissive": {
+            "value": {
+              "y": 0,
+              "w": 1,
+              "x": 0,
+              "z": 0
+            }
+          },
+          "roughness": 1,
+          "baseColor": {
+            "value": {
+              "y": 0.78,
+              "w": 1,
+              "x": 0.78,
+              "z": 0.78
+            }
+          },
+          "normalScale": 1,
+          "metallic": 0,
+          "primitive": "Sphere",
+          "occlusionStrength": 1
+        },
+        "Iryven.Transform": {
+          "rotation": {
+            "y": 0.0,
+            "w": 1.0,
+            "x": 0.0,
+            "z": 0.0
+          },
+          "scale": {
+            "y": 1.3,
+            "x": 1.3,
+            "z": 1.3
+          },
+          "position": {
+            "y": 0.65,
+            "x": -3.7,
+            "z": -5.35
+          }
+        },
+        "Iryven.MeshRenderer": null
+      }
+    },
+    {
+      "name": "Cylinder contact",
+      "tags": [
+        "Iryven.World.SceneEntityTag"
+      ],
+      "components": {
+        "EditorRenderable": {
+          "emissive": {
+            "value": {
+              "y": 0,
+              "w": 1,
+              "x": 0,
+              "z": 0
+            }
+          },
+          "roughness": 1,
+          "baseColor": {
+            "value": {
+              "y": 0.78,
+              "w": 1,
+              "x": 0.78,
+              "z": 0.78
+            }
+          },
+          "normalScale": 1,
+          "metallic": 0,
+          "primitive": "Cylinder",
+          "occlusionStrength": 1
+        },
+        "Iryven.Transform": {
+          "rotation": {
+            "y": 0.0,
+            "w": 1.0,
+            "x": 0.0,
+            "z": 0.0
+          },
+          "scale": {
+            "y": 1.8,
+            "x": 1.1,
+            "z": 1.1
+          },
+          "position": {
+            "y": 0.9,
+            "x": -1.7,
+            "z": -4.6
+          }
+        },
+        "Iryven.MeshRenderer": null
+      }
+    },
+    {
+      "name": "Slit left block",
+      "tags": [
+        "Iryven.World.SceneEntityTag"
+      ],
+      "components": {
+        "EditorRenderable": {
+          "emissive": {
+            "value": {
+              "y": 0,
+              "w": 1,
+              "x": 0,
+              "z": 0
+            }
+          },
+          "roughness": 1,
+          "baseColor": {
+            "value": {
+              "y": 0.78,
+              "w": 1,
+              "x": 0.78,
+              "z": 0.78
+            }
+          },
+          "normalScale": 1,
+          "metallic": 0,
+          "primitive": "Cube",
+          "occlusionStrength": 1
+        },
+        "Iryven.Transform": {
+          "rotation": {
+            "y": 0.0,
+            "w": 1.0,
+            "x": 0.0,
+            "z": 0.0
+          },
+          "scale": {
+            "y": 1.8,
+            "x": 1.1,
+            "z": 1.8
+          },
+          "position": {
+            "y": 0.9,
+            "x": 1.0,
+            "z": -4.5
+          }
+        },
+        "Iryven.MeshRenderer": null
+      }
+    },
+    {
+      "name": "Slit right block - 0.10 gap",
+      "tags": [
+        "Iryven.World.SceneEntityTag"
+      ],
+      "components": {
+        "EditorRenderable": {
+          "emissive": {
+            "value": {
+              "y": 0,
+              "w": 1,
+              "x": 0,
+              "z": 0
+            }
+          },
+          "roughness": 1,
+          "baseColor": {
+            "value": {
+              "y": 0.78,
+              "w": 1,
+              "x": 0.78,
+              "z": 0.78
+            }
+          },
+          "normalScale": 1,
+          "metallic": 0,
+          "primitive": "Cube",
+          "occlusionStrength": 1
+        },
+        "Iryven.Transform": {
+          "rotation": {
+            "y": 0.0,
+            "w": 1.0,
+            "x": 0.0,
+            "z": 0.0
+          },
+          "scale": {
+            "y": 1.8,
+            "x": 1.1,
+            "z": 1.8
+          },
+          "position": {
+            "y": 0.9,
+            "x": 2.2,
+            "z": -4.5
+          }
+        },
+        "Iryven.MeshRenderer": null
+      }
+    },
+    {
+      "name": "Overhang left support",
+      "tags": [
+        "Iryven.World.SceneEntityTag"
+      ],
+      "components": {
+        "EditorRenderable": {
+          "emissive": {
+            "value": {
+              "y": 0,
+              "w": 1,
+              "x": 0,
+              "z": 0
+            }
+          },
+          "roughness": 1,
+          "baseColor": {
+            "value": {
+              "y": 0.78,
+              "w": 1,
+              "x": 0.78,
+              "z": 0.78
+            }
+          },
+          "normalScale": 1,
+          "metallic": 0,
+          "primitive": "Cube",
+          "occlusionStrength": 1
+        },
+        "Iryven.Transform": {
+          "rotation": {
+            "y": 0.0,
+            "w": 1.0,
+            "x": 0.0,
+            "z": 0.0
+          },
+          "scale": {
+            "y": 1.1,
+            "x": 0.35,
+            "z": 1.5
+          },
+          "position": {
+            "y": 0.55,
+            "x": 4.0,
+            "z": -3.8
+          }
+        },
+        "Iryven.MeshRenderer": null
+      }
+    },
+    {
+      "name": "Overhang right support",
+      "tags": [
+        "Iryven.World.SceneEntityTag"
+      ],
+      "components": {
+        "EditorRenderable": {
+          "emissive": {
+            "value": {
+              "y": 0,
+              "w": 1,
+              "x": 0,
+              "z": 0
+            }
+          },
+          "roughness": 1,
+          "baseColor": {
+            "value": {
+              "y": 0.78,
+              "w": 1,
+              "x": 0.78,
+              "z": 0.78
+            }
+          },
+          "normalScale": 1,
+          "metallic": 0,
+          "primitive": "Cube",
+          "occlusionStrength": 1
+        },
+        "Iryven.Transform": {
+          "rotation": {
+            "y": 0.0,
+            "w": 1.0,
+            "x": 0.0,
+            "z": 0.0
+          },
+          "scale": {
+            "y": 1.1,
+            "x": 0.35,
+            "z": 1.5
+          },
+          "position": {
+            "y": 0.55,
+            "x": 5.8,
+            "z": -3.8
+          }
+        },
+        "Iryven.MeshRenderer": null
+      }
+    },
+    {
+      "name": "Overhang roof",
+      "tags": [
+        "Iryven.World.SceneEntityTag"
+      ],
+      "components": {
+        "EditorRenderable": {
+          "emissive": {
+            "value": {
+              "y": 0,
+              "w": 1,
+              "x": 0,
+              "z": 0
+            }
+          },
+          "roughness": 1,
+          "baseColor": {
+            "value": {
+              "y": 0.78,
+              "w": 1,
+              "x": 0.78,
+              "z": 0.78
+            }
+          },
+          "normalScale": 1,
+          "metallic": 0,
+          "primitive": "Cube",
+          "occlusionStrength": 1
+        },
+        "Iryven.Transform": {
+          "rotation": {
+            "y": 0.0,
+            "w": 1.0,
+            "x": 0.0,
+            "z": 0.0
+          },
+          "scale": {
+            "y": 0.3,
+            "x": 2.5,
+            "z": 1.5
+          },
+          "position": {
+            "y": 1.25,
+            "x": 4.9,
+            "z": -3.8
+          }
+        },
+        "Iryven.MeshRenderer": null
+      }
+    },
+    {
+      "name": "Overhang interior sphere",
+      "tags": [
+        "Iryven.World.SceneEntityTag"
+      ],
+      "components": {
+        "EditorRenderable": {
+          "emissive": {
+            "value": {
+              "y": 0,
+              "w": 1,
+              "x": 0,
+              "z": 0
+            }
+          },
+          "roughness": 1,
+          "baseColor": {
+            "value": {
+              "y": 0.78,
+              "w": 1,
+              "x": 0.78,
+              "z": 0.78
+            }
+          },
+          "normalScale": 1,
+          "metallic": 0,
+          "primitive": "Sphere",
+          "occlusionStrength": 1
+        },
+        "Iryven.Transform": {
+          "rotation": {
+            "y": 0.0,
+            "w": 1.0,
+            "x": 0.0,
+            "z": 0.0
+          },
+          "scale": {
+            "y": 0.8,
+            "x": 0.8,
+            "z": 0.8
+          },
+          "position": {
+            "y": 0.4,
+            "x": 4.9,
+            "z": -3.6
+          }
+        },
+        "Iryven.MeshRenderer": null
+      }
+    },
+    {
+      "name": "Step 1",
+      "tags": [
+        "Iryven.World.SceneEntityTag"
+      ],
+      "components": {
+        "EditorRenderable": {
+          "emissive": {
+            "value": {
+              "y": 0,
+              "w": 1,
+              "x": 0,
+              "z": 0
+            }
+          },
+          "roughness": 1,
+          "baseColor": {
+            "value": {
+              "y": 0.78,
+              "w": 1,
+              "x": 0.78,
+              "z": 0.78
+            }
+          },
+          "normalScale": 1,
+          "metallic": 0,
+          "primitive": "Cube",
+          "occlusionStrength": 1
+        },
+        "Iryven.Transform": {
+          "rotation": {
+            "y": 0.0,
+            "w": 1.0,
+            "x": 0.0,
+            "z": 0.0
+          },
+          "scale": {
+            "y": 0.3,
+            "x": 0.8,
+            "z": 1.5
+          },
+          "position": {
+            "y": 0.15,
+            "x": -5.3,
+            "z": -1.5
+          }
+        },
+        "Iryven.MeshRenderer": null
+      }
+    },
+    {
+      "name": "Step 2",
+      "tags": [
+        "Iryven.World.SceneEntityTag"
+      ],
+      "components": {
+        "EditorRenderable": {
+          "emissive": {
+            "value": {
+              "y": 0,
+              "w": 1,
+              "x": 0,
+              "z": 0
+            }
+          },
+          "roughness": 1,
+          "baseColor": {
+            "value": {
+              "y": 0.78,
+              "w": 1,
+              "x": 0.78,
+              "z": 0.78
+            }
+          },
+          "normalScale": 1,
+          "metallic": 0,
+          "primitive": "Cube",
+          "occlusionStrength": 1
+        },
+        "Iryven.Transform": {
+          "rotation": {
+            "y": 0.0,
+            "w": 1.0,
+            "x": 0.0,
+            "z": 0.0
+          },
+          "scale": {
+            "y": 0.6,
+            "x": 0.8,
+            "z": 1.5
+          },
+          "position": {
+            "y": 0.3,
+            "x": -4.5,
+            "z": -1.5
+          }
+        },
+        "Iryven.MeshRenderer": null
+      }
+    },
+    {
+      "name": "Step 3",
+      "tags": [
+        "Iryven.World.SceneEntityTag"
+      ],
+      "components": {
+        "EditorRenderable": {
+          "emissive": {
+            "value": {
+              "y": 0,
+              "w": 1,
+              "x": 0,
+              "z": 0
+            }
+          },
+          "roughness": 1,
+          "baseColor": {
+            "value": {
+              "y": 0.78,
+              "w": 1,
+              "x": 0.78,
+              "z": 0.78
+            }
+          },
+          "normalScale": 1,
+          "metallic": 0,
+          "primitive": "Cube",
+          "occlusionStrength": 1
+        },
+        "Iryven.Transform": {
+          "rotation": {
+            "y": 0.0,
+            "w": 1.0,
+            "x": 0.0,
+            "z": 0.0
+          },
+          "scale": {
+            "y": 0.9,
+            "x": 0.8,
+            "z": 1.5
+          },
+          "position": {
+            "y": 0.45,
+            "x": -3.7,
+            "z": -1.5
+          }
+        },
+        "Iryven.MeshRenderer": null
+      }
+    },
+    {
+      "name": "Step 4",
+      "tags": [
+        "Iryven.World.SceneEntityTag"
+      ],
+      "components": {
+        "EditorRenderable": {
+          "emissive": {
+            "value": {
+              "y": 0,
+              "w": 1,
+              "x": 0,
+              "z": 0
+            }
+          },
+          "roughness": 1,
+          "baseColor": {
+            "value": {
+              "y": 0.78,
+              "w": 1,
+              "x": 0.78,
+              "z": 0.78
+            }
+          },
+          "normalScale": 1,
+          "metallic": 0,
+          "primitive": "Cube",
+          "occlusionStrength": 1
+        },
+        "Iryven.Transform": {
+          "rotation": {
+            "y": 0.0,
+            "w": 1.0,
+            "x": 0.0,
+            "z": 0.0
+          },
+          "scale": {
+            "y": 1.2,
+            "x": 0.8,
+            "z": 1.5
+          },
+          "position": {
+            "y": 0.6,
+            "x": -2.9,
+            "z": -1.5
+          }
+        },
+        "Iryven.MeshRenderer": null
+      }
+    },
+    {
+      "name": "Intersecting block A",
+      "tags": [
+        "Iryven.World.SceneEntityTag"
+      ],
+      "components": {
+        "EditorRenderable": {
+          "emissive": {
+            "value": {
+              "y": 0,
+              "w": 1,
+              "x": 0,
+              "z": 0
+            }
+          },
+          "roughness": 1,
+          "baseColor": {
+            "value": {
+              "y": 0.78,
+              "w": 1,
+              "x": 0.78,
+              "z": 0.78
+            }
+          },
+          "normalScale": 1,
+          "metallic": 0,
+          "primitive": "Cube",
+          "occlusionStrength": 1
+        },
+        "Iryven.Transform": {
+          "rotation": {
+            "y": 0.0,
+            "w": 1.0,
+            "x": 0.0,
+            "z": 0.0
+          },
+          "scale": {
+            "y": 0.9,
+            "x": 1.3,
+            "z": 1.3
+          },
+          "position": {
+            "y": 0.45,
+            "x": -0.8,
+            "z": -1.4
+          }
+        },
+        "Iryven.MeshRenderer": null
+      }
+    },
+    {
+      "name": "Intersecting block B",
+      "tags": [
+        "Iryven.World.SceneEntityTag"
+      ],
+      "components": {
+        "EditorRenderable": {
+          "emissive": {
+            "value": {
+              "y": 0,
+              "w": 1,
+              "x": 0,
+              "z": 0
+            }
+          },
+          "roughness": 1,
+          "baseColor": {
+            "value": {
+              "y": 0.78,
+              "w": 1,
+              "x": 0.78,
+              "z": 0.78
+            }
+          },
+          "normalScale": 1,
+          "metallic": 0,
+          "primitive": "Cube",
+          "occlusionStrength": 1
+        },
+        "Iryven.Transform": {
+          "rotation": {
+            "y": 0.0,
+            "w": 1.0,
+            "x": 0.0,
+            "z": 0.0
+          },
+          "scale": {
+            "y": 1.1,
+            "x": 0.9,
+            "z": 0.9
+          },
+          "position": {
+            "y": 0.95,
+            "x": -0.1,
+            "z": -1.2
+          }
+        },
+        "Iryven.MeshRenderer": null
+      }
+    },
+    {
+      "name": "Thin vertical occluder",
+      "tags": [
+        "Iryven.World.SceneEntityTag"
+      ],
+      "components": {
+        "EditorRenderable": {
+          "emissive": {
+            "value": {
+              "y": 0,
+              "w": 1,
+              "x": 0,
+              "z": 0
+            }
+          },
+          "roughness": 1,
+          "baseColor": {
+            "value": {
+              "y": 0.78,
+              "w": 1,
+              "x": 0.78,
+              "z": 0.78
+            }
+          },
+          "normalScale": 1,
+          "metallic": 0,
+          "primitive": "Cube",
+          "occlusionStrength": 1
+        },
+        "Iryven.Transform": {
+          "rotation": {
+            "y": 0.0,
+            "w": 1.0,
+            "x": 0.0,
+            "z": 0.0
+          },
+          "scale": {
+            "y": 1.8,
+            "x": 0.12,
+            "z": 1.5
+          },
+          "position": {
+            "y": 0.9,
+            "x": 2.3,
+            "z": -1.0
+          }
+        },
+        "Iryven.MeshRenderer": null
+      }
+    },
+    {
+      "name": "Isolated sphere - bright exposed top",
+      "tags": [
+        "Iryven.World.SceneEntityTag"
+      ],
+      "components": {
+        "EditorRenderable": {
+          "emissive": {
+            "value": {
+              "y": 0,
+              "w": 1,
+              "x": 0,
+              "z": 0
+            }
+          },
+          "roughness": 1,
+          "baseColor": {
+            "value": {
+              "y": 0.78,
+              "w": 1,
+              "x": 0.78,
+              "z": 0.78
+            }
+          },
+          "normalScale": 1,
+          "metallic": 0,
+          "primitive": "Sphere",
+          "occlusionStrength": 1
+        },
+        "Iryven.Transform": {
+          "rotation": {
+            "y": 0.0,
+            "w": 1.0,
+            "x": 0.0,
+            "z": 0.0
+          },
+          "scale": {
+            "y": 1.6,
+            "x": 1.6,
+            "z": 1.6
+          },
+          "position": {
+            "y": 0.8,
+            "x": 4.9,
+            "z": -0.3
+          }
+        },
+        "Iryven.MeshRenderer": null
+      }
+    },
+    {
+      "name": "Sphere floor gap 0.00",
+      "tags": [
+        "Iryven.World.SceneEntityTag"
+      ],
+      "components": {
+        "EditorRenderable": {
+          "emissive": {
+            "value": {
+              "y": 0,
+              "w": 1,
+              "x": 0,
+              "z": 0
+            }
+          },
+          "roughness": 1,
+          "baseColor": {
+            "value": {
+              "y": 0.78,
+              "w": 1,
+              "x": 0.78,
+              "z": 0.78
+            }
+          },
+          "normalScale": 1,
+          "metallic": 0,
+          "primitive": "Sphere",
+          "occlusionStrength": 1
+        },
+        "Iryven.Transform": {
+          "rotation": {
+            "y": 0.0,
+            "w": 1.0,
+            "x": 0.0,
+            "z": 0.0
+          },
+          "scale": {
+            "y": 1.0,
+            "x": 1.0,
+            "z": 1.0
+          },
+          "position": {
+            "y": 0.5,
+            "x": -4.8,
+            "z": 2.1
+          }
+        },
+        "Iryven.MeshRenderer": null
+      }
+    },
+    {
+      "name": "Sphere floor gap 0.05",
+      "tags": [
+        "Iryven.World.SceneEntityTag"
+      ],
+      "components": {
+        "EditorRenderable": {
+          "emissive": {
+            "value": {
+              "y": 0,
+              "w": 1,
+              "x": 0,
+              "z": 0
+            }
+          },
+          "roughness": 1,
+          "baseColor": {
+            "value": {
+              "y": 0.78,
+              "w": 1,
+              "x": 0.78,
+              "z": 0.78
+            }
+          },
+          "normalScale": 1,
+          "metallic": 0,
+          "primitive": "Sphere",
+          "occlusionStrength": 1
+        },
+        "Iryven.Transform": {
+          "rotation": {
+            "y": 0.0,
+            "w": 1.0,
+            "x": 0.0,
+            "z": 0.0
+          },
+          "scale": {
+            "y": 1.0,
+            "x": 1.0,
+            "z": 1.0
+          },
+          "position": {
+            "y": 0.55,
+            "x": -2.7,
+            "z": 2.1
+          }
+        },
+        "Iryven.MeshRenderer": null
+      }
+    },
+    {
+      "name": "Sphere floor gap 0.15",
+      "tags": [
+        "Iryven.World.SceneEntityTag"
+      ],
+      "components": {
+        "EditorRenderable": {
+          "emissive": {
+            "value": {
+              "y": 0,
+              "w": 1,
+              "x": 0,
+              "z": 0
+            }
+          },
+          "roughness": 1,
+          "baseColor": {
+            "value": {
+              "y": 0.78,
+              "w": 1,
+              "x": 0.78,
+              "z": 0.78
+            }
+          },
+          "normalScale": 1,
+          "metallic": 0,
+          "primitive": "Sphere",
+          "occlusionStrength": 1
+        },
+        "Iryven.Transform": {
+          "rotation": {
+            "y": 0.0,
+            "w": 1.0,
+            "x": 0.0,
+            "z": 0.0
+          },
+          "scale": {
+            "y": 1.0,
+            "x": 1.0,
+            "z": 1.0
+          },
+          "position": {
+            "y": 0.65,
+            "x": -0.6,
+            "z": 2.1
+          }
+        },
+        "Iryven.MeshRenderer": null
+      }
+    },
+    {
+      "name": "Sphere floor gap 0.35",
+      "tags": [
+        "Iryven.World.SceneEntityTag"
+      ],
+      "components": {
+        "EditorRenderable": {
+          "emissive": {
+            "value": {
+              "y": 0,
+              "w": 1,
+              "x": 0,
+              "z": 0
+            }
+          },
+          "roughness": 1,
+          "baseColor": {
+            "value": {
+              "y": 0.78,
+              "w": 1,
+              "x": 0.78,
+              "z": 0.78
+            }
+          },
+          "normalScale": 1,
+          "metallic": 0,
+          "primitive": "Sphere",
+          "occlusionStrength": 1
+        },
+        "Iryven.Transform": {
+          "rotation": {
+            "y": 0.0,
+            "w": 1.0,
+            "x": 0.0,
+            "z": 0.0
+          },
+          "scale": {
+            "y": 1.0,
+            "x": 1.0,
+            "z": 1.0
+          },
+          "position": {
+            "y": 0.85,
+            "x": 1.5,
+            "z": 2.1
+          }
+        },
+        "Iryven.MeshRenderer": null
+      }
+    },
+    {
+      "name": "Sphere floor gap 0.80",
+      "tags": [
+        "Iryven.World.SceneEntityTag"
+      ],
+      "components": {
+        "EditorRenderable": {
+          "emissive": {
+            "value": {
+              "y": 0,
+              "w": 1,
+              "x": 0,
+              "z": 0
+            }
+          },
+          "roughness": 1,
+          "baseColor": {
+            "value": {
+              "y": 0.78,
+              "w": 1,
+              "x": 0.78,
+              "z": 0.78
+            }
+          },
+          "normalScale": 1,
+          "metallic": 0,
+          "primitive": "Sphere",
+          "occlusionStrength": 1
+        },
+        "Iryven.Transform": {
+          "rotation": {
+            "y": 0.0,
+            "w": 1.0,
+            "x": 0.0,
+            "z": 0.0
+          },
+          "scale": {
+            "y": 1.0,
+            "x": 1.0,
+            "z": 1.0
+          },
+          "position": {
+            "y": 1.3,
+            "x": 3.6,
+            "z": 2.1
+          }
+        },
+        "Iryven.MeshRenderer": null
+      }
+    },
+    {
+      "name": "SSAO Fill Light",
+      "tags": [
+        "Iryven.World.SceneEntityTag"
+      ],
+      "components": {
+        "Iryven.Transform": {
+          "position": {
+            "y": 5.0,
+            "z": 0.0,
+            "x": 0.0
+          },
+          "rotation": {
+            "w": 0.554032293222323,
+            "y": -0.791240115236224,
+            "z": -0.212012149896655,
+            "x": -0.148452505549685
+          },
+          "scale": {
+            "y": 1.0,
+            "z": 1.0,
+            "x": 1.0
+          }
+        },
+        "Iryven.Light": {
+          "enabled": true,
+          "range": 20,
+          "intensity": 1.5,
+          "outerConeAngle": 30,
+          "type": "Directional",
+          "innerConeAngle": 20,
+          "color": {
+            "value": {
+              "w": 1,
+              "y": 1,
+              "z": 1,
+              "x": 1
+            }
+          }
+        }
+      }
+    }
+  ]
+}
