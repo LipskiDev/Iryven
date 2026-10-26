@@ -31,6 +31,7 @@
 #include "passes/cloth_compute.h"
 #include "passes/forward.h"
 #include "passes/tonemapping.h"
+#include "passes/ssao.h"
 
 namespace {
 
@@ -167,6 +168,7 @@ Renderer::Renderer(Window &window, AssetUploadQueue &assetUploads,
   forwardPass_ = std::make_unique<ForwardPass>(*this);
   shadingPass_ = std::make_unique<ShadingPass>(*this);
   tonemappingPass_ = std::make_unique<TonemappingPass>(*this);
+  ssaoPass_ = std::make_unique<SSAOPass>(*this);
   frameGraphBuilder_.RegisterRenderPass("gbuffer", *gbufferPass_);
   frameGraphBuilder_.RegisterRenderPass("lightCulling", *lightCullingPass_);
   frameGraphBuilder_.RegisterRenderPass("shadowMapping", *shadowMappingPass_);
@@ -175,6 +177,7 @@ Renderer::Renderer(Window &window, AssetUploadQueue &assetUploads,
   frameGraphBuilder_.RegisterRenderPass("forward", *forwardPass_);
   frameGraphBuilder_.RegisterRenderPass("hiZ", *hiZPass_);
   frameGraphBuilder_.RegisterRenderPass("tonemapping", *tonemappingPass_);
+  frameGraphBuilder_.RegisterRenderPass("ssao", *ssaoPass_);
 
   // Cloth must signal before tiling so its graphics consumer can start early.
   if (clothComputePipeline_) {
@@ -260,6 +263,30 @@ Renderer::Renderer(Window &window, AssetUploadQueue &assetUploads,
                        .inputs = std::move(gbufferInputs),
                        .outputs = std::move(gbufferOutputs)});
 
+  std::vector<FrameGraphResourceInputCreation> ssaoInputs;
+  ssaoInputs.push_back({.type = FrameGraphResourceType::Texture,
+                        .access = FrameGraphAccess::ShaderSampledRead,
+                        .name = "depth"});
+  ssaoInputs.push_back({.type = FrameGraphResourceType::Texture,
+                        .access = FrameGraphAccess::ShaderSampledRead,
+                        .name = "gNormalRoughness"});
+  frameGraph_.AddNode(
+      {.name = "ssao",
+       .inputs = std::move(ssaoInputs),
+       .outputs = {
+           {.type = FrameGraphResourceType::Texture,
+            .access = FrameGraphAccess::ShaderStorageWrite,
+            .info =
+                FrameGraphTextureInfo{
+                    .width = static_cast<std::uint32_t>(width),
+                    .height = static_cast<std::uint32_t>(height),
+                    .format = Format::RGBA32_FLOAT,
+                    .usage = ImageUsage::Sampled | ImageUsage::Storage,
+                    .loadOp = RenderPassOperation::Clear,
+                    .resizeWithSwapchain = true},
+            .name = "ssao"},
+       }});
+
   std::vector<FrameGraphResourceInputCreation> shadingInputs;
   shadingInputs.push_back({.type = FrameGraphResourceType::Buffer,
                            .access = FrameGraphAccess::ShaderStorageRead,
@@ -277,7 +304,10 @@ Renderer::Renderer(Window &window, AssetUploadQueue &assetUploads,
   shadingInputs.push_back({.type = FrameGraphResourceType::Texture,
                            .access = FrameGraphAccess::ShaderSampledRead,
                            .name = "pointShadowMap"});
-  const Color clearColor = Color::CornflowerBlue;
+  shadingInputs.push_back({.type = FrameGraphResourceType::Texture,
+                           .access = FrameGraphAccess::ShaderSampledRead,
+                           .name = "ssao"});
+  const Color clearColor = Color::Black;
   frameGraph_.AddNode(
       {.name = "shading",
        .inputs = std::move(shadingInputs),
@@ -382,6 +412,7 @@ Renderer::~Renderer() {
   frameGraphBuilder_.Shutdown();
   forwardPass_.reset();
   tonemappingPass_.reset();
+  ssaoPass_.reset();
   clothCompute_.reset();
   gbufferPass_.reset();
   lightCullingPass_.reset();
@@ -3094,3 +3125,8 @@ void Renderer::DestroyBindlessResources() {
 }
 
 }  // namespace Iryven
+
+void Iryven::Renderer::SetSsaoSettings(std::uint32_t sampleCount, float radius,
+                                       float bias) {
+  ssaoPass_->SetSettings(sampleCount, radius, bias);
+}

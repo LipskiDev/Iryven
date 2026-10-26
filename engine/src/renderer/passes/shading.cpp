@@ -22,7 +22,7 @@ Renderer::ShadingPass::ShadingPass(Renderer &renderer) : renderer_(renderer) {
                            ShaderStage::Vertex);
     fragment_ = createShader("assets/shaders/internal/shading.hlsl",
                              ShaderStage::Fragment);
-    std::array<BindingDesc, 6> bindings{};
+    std::array<BindingDesc, 7> bindings{};
     for (std::uint32_t i = 0; i < bindings.size(); ++i)
       bindings[i] = {.binding = i,
                      .type = BindingType::CombinedImageSampler,
@@ -107,6 +107,19 @@ void Renderer::ShadingPass::PreRender(ICommandList &, const RenderScene &) {
       .type = BindingType::CombinedImageSampler,
       .imageInfo = &shadowImage,
   });
+  const auto &ssaoTexture = std::get<FrameGraphTextureInfo>(
+      renderer_.frameGraph_.GetResource("ssao")->info);
+  const BindingImageInfo ssaoImage{
+      .sampler = sampler_,
+      .imageView = ssaoTexture.view,
+      .imageLayout = ImageLayout::ShaderReadOnly,
+  };
+  renderer_.device_->UpdateBindingSet({
+      .dstSet = set,
+      .binding = 6,
+      .type = BindingType::CombinedImageSampler,
+      .imageInfo = &ssaoImage,
+  });
 }
 void Renderer::ShadingPass::Render(ICommandList &commands,
                                    const RenderScene &scene) {
@@ -124,6 +137,7 @@ void Renderer::ShadingPass::Render(ICommandList &commands,
     std::uint32_t lightCountView = 0;
     std::uint32_t shadowTierView = 0;
     std::uint32_t gbufferView = 0;
+    std::uint32_t useSsao = 0;
   };
   static_assert(sizeof(Constants) == 80);
   Constants constants{
@@ -131,8 +145,10 @@ void Renderer::ShadingPass::Render(ICommandList &commands,
       .lightCountView = renderer_.lightCountView_ ? 1u : 0u,
       .shadowTierView = renderer_.shadowTierView_ ? 1u : 0u,
       .gbufferView = static_cast<std::uint32_t>(renderer_.gbufferView_),
+      .useSsao = renderer_.useSsao_ ? 1u : 0u,
   };
-  commands.PushConstants(ShaderStage::Fragment, 0, 76, &constants);
+  commands.PushConstants(ShaderStage::Fragment, 0, sizeof(constants),
+                         &constants);
   commands.Draw(3);
 }
 }  // namespace Iryven

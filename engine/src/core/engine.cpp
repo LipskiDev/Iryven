@@ -247,3 +247,12 @@ void Iryven::Engine::SetGBufferView(GBufferView view) {
 void Iryven::Engine::SetShadowTierView(bool enabled) {
   renderer_->SetShadowTierView(enabled);
 }
+
+void Iryven::Engine::SetUseSsao(bool enabled) {
+  renderer_->SetUseSsao(enabled);
+}
+
+void Iryven::Engine::SetSsaoSettings(std::uint32_t sampleCount, float radius,
+                                     float bias) {
+  renderer_->SetSsaoSettings(sampleCount, radius, bias);
+}

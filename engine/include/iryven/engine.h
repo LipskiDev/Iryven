@@ -86,6 +86,8 @@ class Engine {
   std::unique_ptr<Layer> PopOverlay(Layer &overlay);
 
   void Run();
+  void SetSsaoSettings(std::uint32_t sampleCount, float radius, float bias);
+  void SetUseSsao(bool enabled);
   void SetLightCountView(bool enabled);
   void SetShadowTierView(bool enabled);
   void SetGBufferView(GBufferView view);

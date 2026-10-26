@@ -61,6 +61,8 @@ class Renderer final : public RenderContext {
   }
   void DrawScene(const RenderScene &renderScene) override;
   void ToggleCullingCameraFreeze();
+  void SetSsaoSettings(std::uint32_t sampleCount, float radius, float bias);
+  void SetUseSsao(bool enabled) { useSsao_ = enabled; }
   void SetLightCountView(bool enabled) { lightCountView_ = enabled; }
   void SetShadowTierView(bool enabled) { shadowTierView_ = enabled; }
   void SetGBufferView(GBufferView view) { gbufferView_ = view; }
@@ -360,6 +362,7 @@ class Renderer final : public RenderContext {
   class ClothCompute;
   class ForwardPass;
   class TonemappingPass;
+  class SSAOPass;
 
   Window &window_;
   AssetUploadQueue &assetUploads_;
@@ -375,6 +378,7 @@ class Renderer final : public RenderContext {
   RendererCpuTimings cpuTimings_{};
   bool lightCountView_ = false;
   bool shadowTierView_ = false;
+  bool useSsao_ = true;
   Iryven::GBufferView gbufferView_ = Iryven::GBufferView::None;
   std::uint64_t pointShadowMemoryBudget_ = kDefaultPointShadowMemoryBudget;
   SparseShadowAllocator sparseShadowAllocator_{};
@@ -388,6 +392,7 @@ class Renderer final : public RenderContext {
   std::unique_ptr<ClothCompute> clothCompute_;
   std::unique_ptr<ForwardPass> forwardPass_;
   std::unique_ptr<TonemappingPass> tonemappingPass_;
+  std::unique_ptr<SSAOPass> ssaoPass_;
 
   std::unordered_map<const MeshData *, GpuMesh> meshes_;
   std::unordered_map<const Font *, GpuFont> fonts_;

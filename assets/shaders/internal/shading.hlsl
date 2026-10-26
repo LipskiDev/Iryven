@@ -17,6 +17,7 @@ struct ShadingConstants
   uint shadingLightCountView;
   uint shadingShadowTierView;
   uint shadingGBufferView;
+  uint useSsao;
 };
 
 [[vk::push_constant]]
@@ -36,6 +37,8 @@ ConstantBuffer<ShadingConstants> shadingConstants : register(b0, space2147483647
 [[vk::combinedImageSampler]] Texture2D<float4> specularBuffer : register(t3, space1);
 [[vk::combinedImageSampler]] SamplerState specularSampler : register(s3, space1);
 
+[[vk::combinedImageSampler]] Texture2D<float4> ssaoTexture : register(t6, space1);
+[[vk::combinedImageSampler]] SamplerState ssaoSampler : register(s6, space1);
 
 static float4 fragmentPosition;
 static float4 outputColor;
@@ -343,7 +346,14 @@ float3 EvaluateDirectLighting(float3 worldPosition, float3 normal, float3 viewDi
 void RunFragment()
 {
   int2 pixel = int2(fragmentPosition.xy);
+  float ao = ssaoTexture.Load(int3(pixel, 0)).r;
 
+  // Display the entire AO texture, including its unoccluded background.
+  if (shadingConstants.shadingGBufferView == 11u)
+  {
+    outputColor = float4(ao, ao, ao, 1.0f);
+    return;
+  }
   float4 normalRoughnessSample = normalRoughness.Load(int3(pixel, 0));
   if (dot(normalRoughnessSample.xyz, normalRoughnessSample.xyz) < 0.25f)
   {
@@ -399,9 +409,12 @@ void RunFragment()
     outputColor = float4(debugColor, 1.0f);
     return;
   }
+  float ambientOcclusion = emissiveOcclusionSample.w;
+  if (shadingConstants.useSsao != 0u)
+    ambientOcclusion *= saturate(ao);
   float3 lighting = EvaluateDirectLighting(
       worldPosition, (normalize(normalRoughnessSample.xyz)), (normalize(cameraPosition.xyz - worldPosition)),
-      baseColorMetallicSample.xyz, baseColorMetallicSample.w, normalRoughnessSample.w, emissiveOcclusionSample.w,
+      baseColorMetallicSample.xyz, baseColorMetallicSample.w, normalRoughnessSample.w, ambientOcclusion,
       reflectanceAtNormal.xyz, (reflectanceAtNormal.w > 0.5f), 0.0f, (shadingConstants.shadingLightCountView != 0u),
       (shadingConstants.shadingShadowTierView != 0u));
   bool showLightingDebug =

@@ -96,6 +96,10 @@ class EditorLayer final : public Iryven::Layer {
   bool viewerOnly_ = false;
   bool lightCountView_ = false;
   bool shadowTierView_ = false;
+  bool useSsao_ = true;
+  int ssaoSampleCount_ = 32;
+  float ssaoRadius_ = 0.5f;
+  float ssaoBias_ = 0.015f;
   Iryven::GBufferView gbufferView_ = Iryven::GBufferView::None;
   bool playToggleRequested_ = false;
   bool playing_ = false;

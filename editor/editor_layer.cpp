@@ -1032,6 +1032,19 @@ void EditorLayer::DrawPanels() {
                 100, "%.0f deg");
     ImGui::TextDisabled("Lower response = softer motion");
   }
+  if (ImGui::CollapsingHeader("Renderer settings")) {
+    if (ImGui::Checkbox("Use SSAO", &useSsao_))
+      engine_.SetUseSsao(useSsao_);
+    bool ssaoChanged =
+        ImGui::SliderInt("SSAO samples", &ssaoSampleCount_, 1, 64);
+    ssaoChanged |=
+        ImGui::SliderFloat("SSAO radius", &ssaoRadius_, 0.01f, 5.0f, "%.2f");
+    ssaoChanged |=
+        ImGui::SliderFloat("SSAO bias", &ssaoBias_, 0.0f, 0.5f, "%.3f");
+    if (ssaoChanged)
+      engine_.SetSsaoSettings(static_cast<std::uint32_t>(ssaoSampleCount_),
+                              ssaoRadius_, ssaoBias_);
+  }
   if (ImGui::CollapsingHeader("Renderer debug")) {
     if (ImGui::Checkbox("Light count", &lightCountView_)) {
       gbufferView_ = Iryven::GBufferView::None;
@@ -1074,6 +1087,7 @@ void EditorLayer::DrawPanels() {
     drawGBufferView("Specular reflectance", Iryven::GBufferView::Specular);
     drawGBufferView("Material workflow", Iryven::GBufferView::MaterialWorkflow);
     drawGBufferView("Depth", Iryven::GBufferView::Depth);
+    drawGBufferView("SSAO", Iryven::GBufferView::SSAO);
     if (shadowTierView_) {
       ImGui::TextColored({1.0f, 0.2f, 0.15f, 1.0f}, "High / 1024");
       ImGui::TextColored({1.0f, 0.8f, 0.1f, 1.0f}, "Medium / 512");

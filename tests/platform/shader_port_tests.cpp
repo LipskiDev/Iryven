@@ -87,8 +87,8 @@ int main() {
         ++count;
       }
     }
-    if (count != 23)
-      throw std::runtime_error("Expected all 23 engine shader stages");
+    if (count != 24)
+      throw std::runtime_error("Expected all 24 engine shader stages");
     for (const auto stage : {ShaderStage::Vertex, ShaderStage::Fragment}) {
       for (const auto format :
            {ShaderBinaryFormat::Dxil, ShaderBinaryFormat::Spirv}) {

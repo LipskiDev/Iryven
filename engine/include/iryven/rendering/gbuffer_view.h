@@ -13,6 +13,7 @@ enum class GBufferView : std::uint32_t {
   Specular,
   MaterialWorkflow,
   Depth,
-  Meshlets
+  Meshlets,
+  SSAO
 };
 }  // namespace Iryven

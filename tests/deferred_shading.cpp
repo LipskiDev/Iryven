@@ -59,7 +59,7 @@ void RunDeferredShadingPixelTests(bool benchmark, const char *fragmentPath) {
   const BindingPoolSize sizes[]{
       {.type = BindingType::UniformBuffer, .count = 1},
       {.type = BindingType::StorageBuffer, .count = 3},
-      {.type = BindingType::CombinedImageSampler, .count = 6}};
+      {.type = BindingType::CombinedImageSampler, .count = 7}};
   auto pool = device->CreateBindingPool(
       {.poolSizes = sizes, .poolSizeCount = 3, .maxSets = 2});
   auto frameSet = device->AllocateBindingSet(
@@ -181,6 +181,14 @@ void RunDeferredShadingPixelTests(bool benchmark, const char *fragmentPath) {
                                 .imageInfo = &image});
     }
   }
+  // A known scalar AO fixture; only its red channel should be displayed.
+  const BindingImageInfo ssaoInfo{.sampler = sampler,
+                                  .imageView = views[4],
+                                  .imageLayout = ImageLayout::ShaderReadOnly};
+  device->UpdateBindingSet({.dstSet = imageSet,
+                            .binding = 6,
+                            .type = BindingType::CombinedImageSampler,
+                            .imageInfo = &ssaoInfo});
   auto readback =
       device->CreateBuffer({.size = std::uint64_t(width) * height * 16,
                             .usage = BufferUsage::TransferDst,
@@ -190,7 +198,7 @@ void RunDeferredShadingPixelTests(bool benchmark, const char *fragmentPath) {
   auto queries = benchmark
                      ? device->CreateTimestampQueryPool({.queryCount = 21})
                      : QueryPoolHandle{};
-  for (int mode = 0; mode < (benchmark ? 4 : 28); ++mode) {
+  for (int mode = 0; mode < (benchmark ? 4 : 31); ++mode) {
     auto bins = initialBins;
     if (mode == 5 || mode == 7 || mode == 8)
       bins.ranges.fill(Iryven::LightDepthBins::kEmpty);
@@ -331,11 +339,16 @@ void RunDeferredShadingPixelTests(bool benchmark, const char *fragmentPath) {
       std::uint32_t lightCountView;
       std::uint32_t shadowTierView;
       std::uint32_t gbufferView = 0;
+      std::uint32_t useSsao = 0;
     };
     const Constants constants{
         inverseVP, !benchmark && mode >= 15 && mode <= 16 ? 1u : 0u, 0,
-        !benchmark && mode >= 17 ? std::uint32_t(std::min(mode - 16, 10)) : 0u};
-    commands.PushConstants(ShaderStage::Fragment, 0, 76, &constants);
+        !benchmark && mode >= 17 && mode <= 28
+            ? std::uint32_t(mode == 28 ? 11 : std::min(mode - 16, 10))
+            : 0u,
+        !benchmark && mode == 30 ? 1u : 0u};
+    commands.PushConstants(ShaderStage::Fragment, 0, sizeof(constants),
+                           &constants);
     if (benchmark) {
       commands.WriteTimestamp(queries, 0, ShaderStage::Fragment);
       for (std::uint32_t sample = 0; sample < 20; ++sample) {
@@ -380,7 +393,7 @@ void RunDeferredShadingPixelTests(bool benchmark, const char *fragmentPath) {
     const float diffuseWeight = sg ? 0.6f : metallic ? 0.0f : 1.0f;
     const glm::vec3 diffuse =
         (sg ? glm::vec3(1) : 1.0f - f0) * diffuseWeight * base / pi;
-    const std::array<glm::vec3, 11> debugExpected{base,
+    const std::array<glm::vec3, 12> debugExpected{base,
                                                   glm::vec3(0),
                                                   glm::vec3(0.5f, 0.5f, 1),
                                                   glm::vec3(1),
@@ -390,16 +403,19 @@ void RunDeferredShadingPixelTests(bool benchmark, const char *fragmentPath) {
                                                   glm::vec3(0),
                                                   glm::vec3(0.5f),
                                                   glm::vec3(0.2f),
-                                                  f0};
-    const glm::vec3 expected = mode >= 17   ? debugExpected.at(mode - 17)
-                               : mode == 15 ? glm::vec3(0, 0, 1)
-                               : mode == 16 ? glm::vec3(0)
-                               : mode == 0  ? glm::vec3(0.25f, 0.5f, 0.75f)
-                               : mode == 4 || mode == 5 || mode >= 12
-                                   ? base * 0.025f + emissive
-                                   : base * diffuseWeight * 0.025f +
-                                         (diffuse + f0 / (4 * pi)) * 0.81f +
-                                         emissive;
+                                                  f0,
+                                                  glm::vec3(0.5f)};
+    const glm::vec3 expected =
+        mode >= 29 ? base * (mode == 30 ? 0.0125f : 0.025f) +
+                         (diffuse + f0 / (4 * pi)) * 0.81f + emissive
+        : mode >= 17 ? debugExpected.at(mode - 17)
+        : mode == 15 ? glm::vec3(0, 0, 1)
+        : mode == 16 ? glm::vec3(0)
+        : mode == 0  ? glm::vec3(0.25f, 0.5f, 0.75f)
+        : mode == 4 || mode == 5 || mode >= 12
+            ? base * 0.025f + emissive
+            : base * diffuseWeight * 0.025f +
+                  (diffuse + f0 / (4 * pi)) * 0.81f + emissive;
     const auto *pixel = static_cast<const float *>(device->MapBuffer(readback));
     bool matches = std::abs(pixel[3] - 1.0f) < 0.0001f;
     for (int c = 0; c < 3; ++c)

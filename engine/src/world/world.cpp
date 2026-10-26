@@ -129,10 +129,14 @@ RenderScene World::ExtractRenderScene() const {
       return;
     }
 
-    scene.camera = RenderCamera{.view = glm::inverse(transform.ToMatrix()),
-                                .verticalFov = camera.verticalFov,
-                                .nearPlane = camera.nearPlane,
-                                .farPlane = camera.farPlane};
+    scene.camera =
+        RenderCamera{.view = glm::inverse(transform.ToMatrix()),
+                     .projection = glm::perspective(
+                         glm::radians(camera.verticalFov), 16.0f / 9.0f,
+                         camera.nearPlane, camera.farPlane),
+                     .verticalFov = camera.verticalFov,
+                     .nearPlane = camera.nearPlane,
+                     .farPlane = camera.farPlane};
   });
 
   auto renderableQuery = world_.query<const Transform, const MeshRenderer>();

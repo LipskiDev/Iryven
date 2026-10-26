@@ -1,6 +1,6 @@
 # HLSL shaders
 
-The engine's 23 shader stages live in 23 `internal/*.hlsl` entry-point files.
+The engine's 24 shader stages live in 24 `internal/*.hlsl` entry-point files.
 Each file contains one stage and is shared by Vulkan and DX12. Related stages
 use names such as `meshlet.hlsl`, `meshlet_mesh.hlsl`, and `meshlet_task.hlsl`.
 The Sandbox also uses one HLSL source for Vulkan and DX12.

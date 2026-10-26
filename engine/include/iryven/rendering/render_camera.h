@@ -6,6 +6,7 @@ namespace Iryven {
 
 struct RenderCamera {
   glm::mat4 view{1.0f};
+  glm::mat4 projection{1.0f};
   float verticalFov = 60.0f;
   float nearPlane = 0.1f;
   float farPlane = 1000.0f;
